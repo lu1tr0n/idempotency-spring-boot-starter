@@ -3,7 +3,15 @@
 [![Maven Central](https://img.shields.io/maven-central/v/io.github.lu1tr0n/idempotency-spring-boot-starter.svg)](https://central.sonatype.com/artifact/io.github.lu1tr0n/idempotency-spring-boot-starter)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Battle-grade idempotency for Spring Boot 3 — JDBC + Redis backends, **full HTTP response capture**, **Stripe-style payload validation**, Servlet support.
+> **Drop-in Idempotency-Key support for Spring Boot 3 APIs.** Every `POST` / `PUT` / `PATCH` retry returns the cached response — exact same body, status, headers — instead of charging twice, double-creating orders, or re-sending webhooks. JDBC and Redis backends, Stripe-style mismatch detection, zero controller changes.
+
+## The problem
+
+Mobile clients retry on flaky networks. Webhook senders retry on every 5xx. Payment gateways re-deliver callbacks. Without idempotency, every one of those retries can become a duplicate charge, a double-shipped order, or a re-sent email.
+
+The standard fix is the [`Idempotency-Key` HTTP header](https://datatracker.ietf.org/doc/draft-ietf-httpapi-idempotency-key-header/) (Stripe's convention, now an IETF draft): the client picks a unique key per logical operation; the server promises to execute the operation at most once per key and to replay the original response on every retry. Easy to specify, fiddly to implement: you need atomic locking, full HTTP response capture, payload mismatch detection, lock-expiry handling, fail-open vs fail-closed strategy, and a backend that survives restarts.
+
+This starter does all of that with two lines of config.
 
 ## Why another idempotency library?
 
