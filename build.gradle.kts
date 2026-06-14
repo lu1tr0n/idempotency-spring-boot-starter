@@ -66,6 +66,7 @@ dependencies {
     testImplementation("org.springframework.boot:spring-boot-starter-data-redis")
     testImplementation("org.springframework.boot:spring-boot-starter-jdbc")
     testImplementation("com.h2database:h2") // in-memory JDBC for unit IT
+    testImplementation("org.postgresql:postgresql") // real driver for Testcontainers Postgres IT
     testImplementation("org.springframework.boot:spring-boot-testcontainers")
     testImplementation("org.testcontainers:postgresql")
     testImplementation("org.testcontainers:junit-jupiter")

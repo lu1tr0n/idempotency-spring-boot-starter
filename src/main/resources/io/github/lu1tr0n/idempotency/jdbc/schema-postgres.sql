@@ -22,9 +22,12 @@ CREATE TABLE IF NOT EXISTS idempotency_records (
 
     -- Full HTTP response surface. Status code + headers + body + content
     -- type are stored so the replay is byte-for-byte equivalent to the
-    -- original response.
+    -- original response. Headers are stored as a TEXT-encoded JSON object
+    -- (not JSONB) so the same DDL works under H2 for tests and so the
+    -- store implementation can bind plain string parameters without
+    -- per-driver type-cast workarounds.
     http_status           INTEGER       NOT NULL,
-    response_headers      JSONB         NOT NULL DEFAULT '{}'::JSONB,
+    response_headers      TEXT          NOT NULL DEFAULT '{}',
     response_body         BYTEA         NOT NULL,
     response_content_type VARCHAR(255),
 

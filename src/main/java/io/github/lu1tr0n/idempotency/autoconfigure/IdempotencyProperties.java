@@ -93,6 +93,22 @@ public class IdempotencyProperties {
     /** JDBC-specific configuration. */
     private final Jdbc jdbc = new Jdbc();
 
+    /** Redis-specific configuration. */
+    private final Redis redis = new Redis();
+
+    /**
+     * When {@code true} (default), 5xx responses are cached just like 2xx /
+     * 3xx / 4xx. Set to {@code false} so a transient downstream failure
+     * (502 from an upstream API, 503 during a deploy) does not poison the
+     * cache for the full TTL. With {@code false}, the lock is released
+     * instead of the record being saved — the next retry can re-attempt the
+     * operation cleanly.
+     *
+     * <p>Default {@code true} keeps backwards-compatibility with the v0.0.1
+     * behaviour; many shops prefer {@code false} for production.
+     */
+    private boolean cache5xx = true;
+
     // === Getters / setters ===
 
     public boolean isEnabled() { return enabled; }
@@ -112,6 +128,9 @@ public class IdempotencyProperties {
     public PayloadValidation getPayloadValidation() { return payloadValidation; }
     public void setPayloadValidation(PayloadValidation pv) { this.payloadValidation = pv; }
     public Jdbc getJdbc() { return jdbc; }
+    public Redis getRedis() { return redis; }
+    public boolean isCache5xx() { return cache5xx; }
+    public void setCache5xx(boolean cache5xx) { this.cache5xx = cache5xx; }
 
     public enum Backend { AUTO, JDBC, REDIS, IN_MEMORY }
     public enum FailureStrategy { FAIL_OPEN, FAIL_CLOSED }
@@ -140,5 +159,23 @@ public class IdempotencyProperties {
         public void setTableName(String tableName) { this.tableName = tableName; }
         public boolean isAutoCreateTable() { return autoCreateTable; }
         public void setAutoCreateTable(boolean v) { this.autoCreateTable = v; }
+    }
+
+    /** Redis-specific knobs. */
+    public static class Redis {
+        /**
+         * Prefix applied to every Redis key written by the store. Two
+         * sub-namespaces are appended internally: {@code lock:} for the
+         * short-TTL lock key and {@code rec:} for the long-TTL record key.
+         * Defaults to {@code idempotency:}.
+         *
+         * <p>Override when the same Redis instance is shared by multiple
+         * apps and you want app-specific namespacing (e.g.
+         * {@code "payments:idempotency:"}).
+         */
+        private String keyPrefix = "idempotency:";
+
+        public String getKeyPrefix() { return keyPrefix; }
+        public void setKeyPrefix(String keyPrefix) { this.keyPrefix = keyPrefix; }
     }
 }

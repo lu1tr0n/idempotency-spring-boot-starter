@@ -66,9 +66,16 @@ The JDBC backend is the right choice when:
 - You want idempotency state to be transactionally consistent with the rest of your write.
 - You can tolerate ~5 ms of latency for the lock + read round-trips.
 
-### Redis *(v0.0.2)*
+### Redis (auto-activated when `RedisConnectionFactory` is present)
 
-Coming next. Will activate automatically when `RedisConnectionFactory` is on the context and no `DataSource` is present, or when `spring.idempotency.backend=redis` is set explicitly.
+Activates automatically when `spring-boot-starter-data-redis` is on the classpath and no `DataSource` is present, or when `spring.idempotency.backend=redis` is set explicitly. Uses two keys per logical idempotency key (short-TTL lock + long-TTL record) with an atomic Lua script for the verify-token-and-set-and-delete path.
+
+Optional knob: `spring.idempotency.redis.key-prefix` (default `idempotency:`) — override for multi-tenant Redis instances shared across apps.
+
+The Redis backend is the right choice when:
+- You already run Redis for caching/queueing and want zero additional infra.
+- You need sub-millisecond lock acquisition.
+- You can tolerate idempotency state being non-transactional with your business write (use JDBC instead for transactional consistency).
 
 ### In-memory (tests only)
 
@@ -108,12 +115,22 @@ public void health() { ... }
 | `Idempotency-Mismatch: true` | The supplied key was previously used with a different request body. |
 | `Retry-After: <seconds>` | Concurrent request holds the lock; retry shortly. |
 
+## Production toggles
+
+`spring.idempotency.cache-5xx` (default `true`) — when `false`, 5xx responses are not cached. A transient downstream failure (502 / 503 / 504) releases the lock instead of poisoning the cache for the full TTL; the next retry can re-attempt the operation cleanly. Most production services should set this to `false`.
+
+`spring.idempotency.failure-strategy` (default `fail-closed`) — `fail-closed` refuses requests when the storage layer is unreachable rather than risk a duplicate. `fail-open` lets requests through without idempotency guarantees; appropriate only for read-mostly or low-stakes endpoints.
+
+`spring.idempotency.payload-validation` (default `enabled`) — Stripe-style detection of "same idempotency key, different request body" reuse. Disable only when clients legitimately retry with mutated bodies on the same key (rare).
+
 ## Roadmap
 
-- **v0.0.1 (current)** — JDBC backend, servlet filter, payload validation, in-memory store for tests.
-- **v0.0.2** — Redis backend, WebFlux filter, configurable 5xx-cache toggle.
-- **v0.0.3** — Distributed tracing context propagation (OpenTelemetry / Brave).
-- **v0.1.0** — First GA release; surface frozen; async / `Mono` / `CompletableFuture` support.
+- **v0.0.1** — JDBC backend, servlet filter, payload validation, in-memory store for tests.
+- **v0.0.2 (current)** — Redis backend, configurable 5xx-cache toggle, Testcontainers integration tests for Postgres + Redis, GitHub Packages mirror publish.
+- **v0.0.3** — `@Idempotent` annotation AOP wiring, WebFlux filter, async / `Mono` / `CompletableFuture` support.
+- **v0.0.4** — Distributed tracing propagation (OpenTelemetry / Brave), request-body size cap, Flyway migration script, multi-tenant key composition.
+- **v0.0.5** — Micrometer metrics, Spring Boot Actuator health indicator.
+- **v0.1.0** — First GA release; surface frozen; benchmarks vs `spring-idempotency-kit`; sample app; docs site.
 
 ## License
 

@@ -1,2 +1,3 @@
 io.github.lu1tr0n.idempotency.autoconfigure.IdempotencyAutoConfiguration
 io.github.lu1tr0n.idempotency.autoconfigure.JdbcStoreAutoConfiguration
+io.github.lu1tr0n.idempotency.autoconfigure.RedisStoreAutoConfiguration

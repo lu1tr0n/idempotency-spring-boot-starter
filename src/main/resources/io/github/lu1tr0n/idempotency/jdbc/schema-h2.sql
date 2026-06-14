@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS idempotency_records (
     idempotency_key       VARCHAR(255)  PRIMARY KEY,
     payload_hash          VARCHAR(64),
     http_status           INTEGER       NOT NULL,
-    response_headers      CLOB          NOT NULL DEFAULT '{}',
+    response_headers      TEXT          NOT NULL DEFAULT '{}',
     response_body         VARBINARY     NOT NULL,
     response_content_type VARCHAR(255),
     created_at            TIMESTAMP WITH TIME ZONE NOT NULL,
