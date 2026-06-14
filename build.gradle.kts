@@ -100,3 +100,29 @@ mavenPublishing {
     signAllPublications()
     // POM metadata is read from gradle.properties (POM_NAME, POM_DESCRIPTION, ...).
 }
+
+// Secondary publish target: GitHub Packages. This is a mirror — Maven Central
+// remains the canonical registry that real consumers depend on (it has no
+// auth requirement for reads). GitHub Packages requires a PAT even for
+// public packages, so very few consumers will pull from here in practice.
+// The point of mirroring is the repo page sidebar ("Packages" section) and
+// having a backup registry in case Sonatype is ever unreachable.
+//
+// Credentials come from env vars set by the release workflow:
+//   GITHUB_ACTOR — the GH user that triggered the workflow run
+//   GITHUB_TOKEN — the auto-provisioned token with `packages: write`
+// When those env vars are missing (e.g. running locally without auth), the
+// repository definition is harmless; only `publishAllPublicationsToGitHubPackagesRepository`
+// would fail at the upload step, not the build.
+publishing {
+    repositories {
+        maven {
+            name = "GitHubPackages"
+            url = uri("https://maven.pkg.github.com/lu1tr0n/idempotency-spring-boot-starter")
+            credentials {
+                username = System.getenv("GITHUB_ACTOR") ?: ""
+                password = System.getenv("GITHUB_TOKEN") ?: ""
+            }
+        }
+    }
+}

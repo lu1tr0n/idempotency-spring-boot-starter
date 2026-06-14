@@ -18,6 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write   # for `gh release create` later in the job
+      packages: write   # for publish to GitHub Packages mirror
     steps:
       - name: Harden the runner
         uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
@@ -68,6 +69,18 @@ jobs:
           ORG_GRADLE_PROJECT_signingInMemoryKey: ${{ secrets.GPG_SIGNING_KEY }}
           ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ secrets.GPG_SIGNING_PASSPHRASE }}
         run: ./gradlew publishToMavenCentral --no-configuration-cache --no-daemon --stacktrace
+
+      - name: Mirror to GitHub Packages
+        # Secondary publish target — keeps the repo page sidebar showing a
+        # package and provides a backup registry. Maven Central is still the
+        # canonical place to consume from (no auth required). Uses the same
+        # signed artifacts produced for the Central publish above.
+        env:
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ORG_GRADLE_PROJECT_signingInMemoryKey: ${{ secrets.GPG_SIGNING_KEY }}
+          ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ secrets.GPG_SIGNING_PASSPHRASE }}
+        run: ./gradlew publishAllPublicationsToGitHubPackagesRepository --no-configuration-cache --no-daemon --stacktrace
 
       - name: Create GitHub Release
         # Single source of truth for release notes is the tag annotation
