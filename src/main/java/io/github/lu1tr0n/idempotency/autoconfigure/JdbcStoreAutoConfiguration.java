@@ -59,25 +59,59 @@ public class JdbcStoreAutoConfiguration {
 
     /**
      * Optional convenience: when {@code spring.idempotency.jdbc.auto-create-table=true},
-     * runs the bundled H2/Postgres schema at startup. Intended for tests and
-     * local dev; production should let Flyway / Liquibase own schema lifecycle.
+     * runs the appropriate platform-specific schema at startup. Intended for
+     * tests and local dev; production should let Flyway / Liquibase own
+     * schema lifecycle.
+     *
+     * <p>Platform detection: when {@code spring.idempotency.jdbc.platform=AUTO}
+     * (the default), the bootstrap inspects {@code DatabaseMetaData.getDatabaseProductName()}
+     * once at startup and picks {@code schema-postgres.sql} for PostgreSQL,
+     * {@code schema-h2.sql} for H2, and falls back to H2 for HSQLDB (which
+     * shares enough syntax). Override with an explicit
+     * {@code spring.idempotency.jdbc.platform} value for less-common drivers.
      */
     @Configuration(proxyBeanMethods = false)
     @ConditionalOnProperty(prefix = "spring.idempotency.jdbc", name = "auto-create-table", havingValue = "true")
     static class SchemaBootstrap {
+        private static final Logger schemaLog = LoggerFactory.getLogger(SchemaBootstrap.class);
+
         @Bean
-        public DataSourceInitializer idempotencySchemaInitializer(DataSource dataSource) {
+        public DataSourceInitializer idempotencySchemaInitializer(DataSource dataSource, IdempotencyProperties properties) {
+            String script = pickScript(dataSource, properties.getJdbc().getPlatform());
+            schemaLog.info("Idempotency: bootstrapping schema from {}", script);
             ResourceDatabasePopulator populator = new ResourceDatabasePopulator();
-            // Default to the H2 flavour at startup — works for H2 AND is a
-            // strict subset of Postgres-compatible DDL so it won't break the
-            // common case where the user runs the auto-create against
-            // Postgres for a one-off dev experiment.
-            populator.addScript(new ClassPathResource("io/github/lu1tr0n/idempotency/jdbc/schema-h2.sql"));
+            populator.addScript(new ClassPathResource(script));
             populator.setContinueOnError(false);
             DataSourceInitializer initializer = new DataSourceInitializer();
             initializer.setDataSource(dataSource);
             initializer.setDatabasePopulator(populator);
             return initializer;
+        }
+
+        private String pickScript(DataSource dataSource, IdempotencyProperties.Jdbc.Platform platform) {
+            IdempotencyProperties.Jdbc.Platform resolved = platform;
+            if (resolved == IdempotencyProperties.Jdbc.Platform.AUTO) {
+                resolved = detectPlatform(dataSource);
+            }
+            return switch (resolved) {
+                case POSTGRES -> "io/github/lu1tr0n/idempotency/jdbc/schema-postgres.sql";
+                case H2, HSQLDB, AUTO -> "io/github/lu1tr0n/idempotency/jdbc/schema-h2.sql";
+            };
+        }
+
+        private IdempotencyProperties.Jdbc.Platform detectPlatform(DataSource dataSource) {
+            try (var conn = dataSource.getConnection()) {
+                String product = conn.getMetaData().getDatabaseProductName();
+                String n = product == null ? "" : product.toLowerCase(java.util.Locale.ROOT);
+                if (n.contains("postgres")) return IdempotencyProperties.Jdbc.Platform.POSTGRES;
+                if (n.contains("h2"))       return IdempotencyProperties.Jdbc.Platform.H2;
+                if (n.contains("hsql"))     return IdempotencyProperties.Jdbc.Platform.HSQLDB;
+                schemaLog.warn("Idempotency: unrecognised database product '{}'; defaulting to H2 schema flavour. Set spring.idempotency.jdbc.platform to override.", product);
+                return IdempotencyProperties.Jdbc.Platform.H2;
+            } catch (java.sql.SQLException e) {
+                schemaLog.warn("Idempotency: failed to read database product name; defaulting to H2 schema flavour.", e);
+                return IdempotencyProperties.Jdbc.Platform.H2;
+            }
         }
     }
 

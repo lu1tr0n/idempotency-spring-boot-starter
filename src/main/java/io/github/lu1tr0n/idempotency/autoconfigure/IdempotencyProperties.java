@@ -1,6 +1,7 @@
 package io.github.lu1tr0n.idempotency.autoconfigure;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.context.properties.DeprecatedConfigurationProperty;
 
 import java.time.Duration;
 import java.util.LinkedHashSet;
@@ -117,6 +118,18 @@ public class IdempotencyProperties {
     public void setHeaderName(String headerName) { this.headerName = headerName; }
     public Duration getTtl() { return ttl; }
     public void setTtl(Duration ttl) { this.ttl = ttl; }
+
+    /**
+     * Backwards-compatible alias for {@link #getTtl()}. Earlier docs and lab
+     * profiles used {@code spring.idempotency.default-ttl}, which was silently
+     * ignored. Now both names work, with {@code ttl} being the canonical one.
+     */
+    @Deprecated(since = "0.0.3", forRemoval = false)
+    @DeprecatedConfigurationProperty(replacement = "spring.idempotency.ttl", reason = "Renamed to `ttl` to match the getter/setter pair.")
+    public Duration getDefaultTtl() { return ttl; }
+
+    @Deprecated(since = "0.0.3", forRemoval = false)
+    public void setDefaultTtl(Duration ttl) { this.ttl = ttl; }
     public Duration getLockTimeout() { return lockTimeout; }
     public void setLockTimeout(Duration lockTimeout) { this.lockTimeout = lockTimeout; }
     public Backend getBackend() { return backend; }
@@ -155,10 +168,24 @@ public class IdempotencyProperties {
          */
         private boolean autoCreateTable = false;
 
+        /**
+         * Which schema flavour to use when {@code autoCreateTable} is on.
+         * {@link Platform#AUTO} (the default) inspects the JDBC metadata
+         * ({@code DatabaseMetaData.getDatabaseProductName()}) at startup and
+         * picks Postgres, H2, MySQL, etc. accordingly. Override only if
+         * detection fails for a less-common driver.
+         */
+        private Platform platform = Platform.AUTO;
+
         public String getTableName() { return tableName; }
         public void setTableName(String tableName) { this.tableName = tableName; }
         public boolean isAutoCreateTable() { return autoCreateTable; }
         public void setAutoCreateTable(boolean v) { this.autoCreateTable = v; }
+        public Platform getPlatform() { return platform; }
+        public void setPlatform(Platform platform) { this.platform = platform; }
+
+        /** Schema flavours bundled with the starter. */
+        public enum Platform { AUTO, H2, POSTGRES, HSQLDB }
     }
 
     /** Redis-specific knobs. */

@@ -26,7 +26,11 @@ import org.springframework.context.annotation.Configuration;
  * {@code @ConditionalOn*} discovery happens in one place and the documentation
  * surface stays small.
  */
-@AutoConfiguration
+@AutoConfiguration(after = {
+    InMemoryStoreAutoConfiguration.class,
+    JdbcStoreAutoConfiguration.class,
+    RedisStoreAutoConfiguration.class
+})
 @ConditionalOnProperty(prefix = "spring.idempotency", name = "enabled", havingValue = "true", matchIfMissing = true)
 @EnableConfigurationProperties(IdempotencyProperties.class)
 public class IdempotencyAutoConfiguration {

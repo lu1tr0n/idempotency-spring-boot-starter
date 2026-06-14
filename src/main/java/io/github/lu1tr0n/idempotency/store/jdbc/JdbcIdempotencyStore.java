@@ -149,19 +149,38 @@ public class JdbcIdempotencyStore implements IdempotencyStore {
 
     private Optional<LockToken> tryStealExpiredLock(IdempotencyKey key, String token, Instant now, Instant lockExpires) {
         try {
+            // Two valid steal targets:
+            //   (a) a lock-only row whose lock has timed out (crashed server),
+            //   (b) a completed row whose record TTL (expires_at) has passed.
+            // Case (b) was the v0.0.2 bug — completed records past their TTL
+            // were unreachable to new attempts because findRecord filtered
+            // them out by expires_at but acquireLock refused to steal because
+            // response_body was populated.
+            //
+            // We also overwrite payload_hash / http_status / response_body to
+            // the lock-only sentinel so a subsequent findRecord during the
+            // re-attempt returns empty (no stale response replays).
             int updated = jdbc.update(
                 "UPDATE " + tableName
-                    + " SET lock_token = ?, locked_until = ?, created_at = ?, expires_at = ?"
+                    + " SET lock_token = ?, locked_until = ?, created_at = ?, expires_at = ?,"
+                    + "     payload_hash = NULL, http_status = 0,"
+                    + "     response_body = ?, response_content_type = NULL,"
+                    + "     response_headers = '{}'"
                     + " WHERE idempotency_key = ?"
-                    + "   AND (response_body IS NULL OR LENGTH(response_body) = 0)"
-                    + "   AND locked_until < ?",
+                    + "   AND ("
+                    + "         ( (response_body IS NULL OR LENGTH(response_body) = 0)"
+                    + "             AND locked_until < ? )"
+                    + "         OR expires_at < ?"
+                    + "       )",
                 ps -> {
                     ps.setString(1, token);
                     ps.setTimestamp(2, Timestamp.from(lockExpires));
                     ps.setTimestamp(3, Timestamp.from(now));
                     ps.setTimestamp(4, Timestamp.from(lockExpires));
-                    ps.setString(5, key.value());
-                    ps.setTimestamp(6, Timestamp.from(now));
+                    ps.setBytes(5, new byte[0]);
+                    ps.setString(6, key.value());
+                    ps.setTimestamp(7, Timestamp.from(now));
+                    ps.setTimestamp(8, Timestamp.from(now));
                 }
             );
             if (updated == 1) {

@@ -98,6 +98,26 @@ public class IdempotencyFilter extends OncePerRequestFilter {
         return !trackedMethods.contains(request.getMethod().toUpperCase(Locale.ROOT));
     }
 
+    /**
+     * Skip the filter on internal {@code /error} dispatches. Without this, when
+     * a controller throws and Spring Boot's ErrorPageFilter forwards to
+     * {@code /error}, our filter would try to re-acquire the lock for the same
+     * idempotency key and return 409 — even though the original chain still
+     * holds the lock and is about to save the (error) response.
+     *
+     * <p>Setting this to {@code true} (the OncePerRequestFilter default for
+     * error dispatches is already true, but we set it explicitly for clarity
+     * and to document the contract) preserves a clean single-pass semantics:
+     * the body that comes out of the {@code /error} forward is captured by the
+     * same response wrapper the original dispatch installed, AND the wrapper's
+     * status is what the {@code /error} handler set (typically 400/500), so
+     * the cached snapshot contains the rendered error body.
+     */
+    @Override
+    protected boolean shouldNotFilterErrorDispatch() {
+        return true;
+    }
+
     @Override
     protected void doFilterInternal(HttpServletRequest request,
                                     HttpServletResponse response,
@@ -217,26 +237,50 @@ public class IdempotencyFilter extends OncePerRequestFilter {
     }
 
     private void replay(IdempotencyRecord cached, HttpServletResponse response) throws IOException {
+        byte[] body = cached.body();
+
+        // Reset any pending state (some upstream filters might have set
+        // Transfer-Encoding: chunked on the response if they touched it).
+        // reset() is safe before commit; it clears headers AND body buffer.
+        if (!response.isCommitted()) {
+            response.reset();
+        }
+
         response.setStatus(cached.statusCode());
         if (cached.contentType() != null) {
             response.setContentType(cached.contentType());
         }
+        // setContentLength BEFORE any header copy so Tomcat picks identity
+        // encoding (not chunked). On 4xx + chunked, Tomcat closes the
+        // connection before flushing the body — finding #4.
+        response.setContentLengthLong(body.length);
         for (Map.Entry<String, List<String>> entry : cached.headers().entrySet()) {
+            // Skip Content-Length / Transfer-Encoding from cached headers —
+            // we set them explicitly above and don't want stale values from
+            // the original chunked response to override our identity encoding.
+            String name = entry.getKey();
+            if ("Content-Length".equalsIgnoreCase(name) || "Transfer-Encoding".equalsIgnoreCase(name)) {
+                continue;
+            }
             for (String value : entry.getValue()) {
-                response.addHeader(entry.getKey(), value);
+                response.addHeader(name, value);
             }
         }
         response.setHeader(REPLAYED_HEADER, "true");
-        response.getOutputStream().write(cached.body());
+        response.getOutputStream().write(body);
         response.getOutputStream().flush();
+        if (!response.isCommitted()) {
+            response.flushBuffer();
+        }
     }
 
     private IdempotencyRecord snapshot(IdempotencyKey key, String payloadHash, CapturingHttpServletResponseWrapper response) {
+        byte[] body = response.capturedBody();
         IdempotencyRecord.Builder b = IdempotencyRecord.builder()
             .key(key.value())
             .payloadHash(payloadValidationEnabled() ? payloadHash : null)
             .statusCode(response.capturedStatus())
-            .body(response.capturedBody())
+            .body(body)
             .contentType(response.getContentType())
             .createdAt(Instant.now())
             .expiresAt(Instant.now().plus(properties.getTtl()));
@@ -274,6 +318,12 @@ public class IdempotencyFilter extends OncePerRequestFilter {
         String body = "{\"error\":{\"code\":\"" + code + "\",\"message\":\"" + escapeJson(message) + "\"}}";
         response.getOutputStream().write(body.getBytes(StandardCharsets.UTF_8));
         response.getOutputStream().flush();
+        // Same rationale as replay(): commit the response so Spring Boot's
+        // ErrorPageFilter does not forward a 4xx/5xx to /error (which would
+        // overwrite our structured error body with the default error page).
+        if (!response.isCommitted()) {
+            response.flushBuffer();
+        }
     }
 
     private static String escapeJson(String s) {
