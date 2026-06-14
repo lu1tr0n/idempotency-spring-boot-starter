@@ -134,11 +134,24 @@ public void health() { ... }
 ## Roadmap
 
 - **v0.0.1** — JDBC backend, servlet filter, payload validation, in-memory store for tests.
-- **v0.0.2 (current)** — Redis backend, configurable 5xx-cache toggle, Testcontainers integration tests for Postgres + Redis, GitHub Packages mirror publish.
+- **v0.0.2** — Redis backend, configurable 5xx-cache toggle, Testcontainers integration tests for Postgres + Redis, GitHub Packages mirror publish.
+- **v0.0.2.1 (current)** — critical fixes: filter wiring on JDBC/Redis backends, 4xx response body replay, per-platform JDBC schema (Postgres/H2), TTL-expired record steal, in-memory auto-config, `default-ttl` alias.
 - **v0.0.3** — `@Idempotent` annotation AOP wiring, WebFlux filter, async / `Mono` / `CompletableFuture` support.
-- **v0.0.4** — Distributed tracing propagation (OpenTelemetry / Brave), request-body size cap, Flyway migration script, multi-tenant key composition.
-- **v0.0.5** — Micrometer metrics, Spring Boot Actuator health indicator.
-- **v0.1.0** — First GA release; surface frozen; benchmarks vs `spring-idempotency-kit`; sample app; docs site.
+- **v0.0.4** — Security & standards hardening:
+  - Composite key with authenticated principal (IETF draft §5 data-leak mitigation)
+  - Request-body size cap (DoS protection)
+  - Pre-validation 4xx escape hatch (`cache-pre-validation: false` — Stripe parity)
+  - `@RequireIdempotencyKey` annotation (IETF §2.7 missing-key 400)
+  - RFC 8941 sf-string parsing (strip surrounding quotes — forward-compat with IETF draft -08+)
+  - Distributed tracing propagation (OpenTelemetry / Brave)
+  - Flyway / Liquibase migration script
+- **v0.0.5** — Operability:
+  - Micrometer metrics + Spring Boot Actuator health indicator
+  - Two-clock TTL (separate in-progress lock TTL vs response record TTL — AWS Powertools pattern)
+  - L1 + L2 cache layering (Caffeine in front of Redis/JDBC for hot keys)
+  - Per-response TTL override header (`X-Idempotency-Persist-For-Seconds`)
+- **v0.0.6** — Extensibility: public `IdempotencyStore` SPI + multi-module layout (`idempotency-core` + `idempotency-store-{jdbc,redis,memory,…}`) so third parties can ship DynamoDB / MongoDB / Cosmos DB / etc. backends.
+- **v0.1.0** — First GA release; surface frozen; benchmarks; sample app; docs site.
 
 ## License
 
