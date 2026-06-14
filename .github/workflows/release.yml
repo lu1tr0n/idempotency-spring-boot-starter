@@ -1,0 +1,84 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Publish to Maven Central
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # for `gh release create` later in the job
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0   # full history so the tag's annotation is available
+
+      - name: Set up JDK 21 (Temurin)
+        uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v5.0.0
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@748248ddd2a24f49513d8f472f81c3a07d4d50e1 # v4.4.4
+
+      - name: Verify VERSION_NAME matches the tag
+        # Defensive check: the tag (e.g. `v0.0.2`) and the VERSION_NAME in
+        # gradle.properties must agree, or we publish a version whose git
+        # ref does not match — a debugging nightmare three months later.
+        env:
+          GIT_TAG: ${{ github.ref_name }}
+        run: |
+          GRADLE_VERSION=$(grep '^VERSION_NAME=' gradle.properties | cut -d= -f2)
+          EXPECTED_TAG="v${GRADLE_VERSION}"
+          if [ "${GIT_TAG}" != "${EXPECTED_TAG}" ]; then
+            echo "::error::Tag (${GIT_TAG}) does not match gradle.properties VERSION_NAME (expected ${EXPECTED_TAG})"
+            exit 1
+          fi
+          echo "Releasing ${GRADLE_VERSION} (tag ${GIT_TAG})"
+
+      - name: Build + test
+        run: ./gradlew build --no-daemon --stacktrace
+
+      - name: Publish to Maven Central via Central Portal
+        # Vanniktech's plugin reads the GPG key from `signingInMemoryKey*`
+        # properties and the Sonatype credentials from `mavenCentralUsername`
+        # / `mavenCentralPassword`. `publishToMavenCentral` uploads the
+        # signed staging bundle; because `automaticRelease = true` is set in
+        # build.gradle.kts, Sonatype's validators promote the deployment to
+        # the public registry without a manual "Publish" click.
+        env:
+          ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          ORG_GRADLE_PROJECT_signingInMemoryKey: ${{ secrets.GPG_SIGNING_KEY }}
+          ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ secrets.GPG_SIGNING_PASSPHRASE }}
+        run: ./gradlew publishToMavenCentral --no-configuration-cache --no-daemon --stacktrace
+
+      - name: Create GitHub Release
+        # Single source of truth for release notes is the tag annotation
+        # (`git tag -s vX.Y.Z -m "..."`). gh CLI reads that automatically.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GIT_TAG: ${{ github.ref_name }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          VERSION="${GIT_TAG#v}"
+          gh release create "${GIT_TAG}" \
+            --repo "${GH_REPO}" \
+            --title "${GIT_TAG}" \
+            --notes "Released to Maven Central. Coordinates: \`io.github.lu1tr0n:idempotency-spring-boot-starter:${VERSION}\` — see [the package page](https://central.sonatype.com/artifact/io.github.lu1tr0n/idempotency-spring-boot-starter/${VERSION})."

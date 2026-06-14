@@ -23,8 +23,11 @@ java {
     // Compile to bytecode 17 so apps on Java 17 LTS still pick us up.
     sourceCompatibility = JavaVersion.VERSION_17
     targetCompatibility = JavaVersion.VERSION_17
-    withSourcesJar()
-    withJavadocJar()
+    // Note: sources jar + javadoc jar are added to the publication by the
+    // Vanniktech maven-publish plugin (see mavenPublishing block below).
+    // Calling `withSourcesJar()` / `withJavadocJar()` here would duplicate
+    // them and Gradle rejects the publish with "multiple artifacts with the
+    // identical extension and classifier".
 }
 
 dependencyManagement {
@@ -77,6 +80,19 @@ tasks.withType<Test> {
         exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
         showStandardStreams = false
     }
+}
+
+// The Spring `io.spring.dependency-management` plugin resolves dependency
+// versions from a BOM at compile / runtime, but does not write those
+// versions into the published Gradle module metadata or POM. Gradle's
+// validator then rejects the publish with "dependencies without versions".
+//
+// Suppressing the check is the standard fix when publishing a library
+// whose downstream consumers also pull in the Spring BOM (which is true
+// for any Spring Boot starter). Documented in
+// https://docs.gradle.org/current/userguide/publishing_maven.html#publishing_maven:resolved_dependencies
+tasks.withType<GenerateModuleMetadata> {
+    suppressedValidationErrors.add("dependencies-without-versions")
 }
 
 mavenPublishing {
