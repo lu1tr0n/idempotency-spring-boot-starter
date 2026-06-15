@@ -45,7 +45,24 @@ dependencies {
     // classpath. `compileOnly` lets non-web apps depend on this starter
     // without dragging in Tomcat.
     compileOnly("org.springframework:spring-web")
+    compileOnly("org.springframework:spring-webmvc")
     compileOnly("jakarta.servlet:jakarta.servlet-api")
+
+    // WebFlux filter — optional, activated when spring-webflux is on the
+    // consumer's classpath. compileOnly so servlet-only apps don't drag in
+    // reactor-netty.
+    compileOnly("org.springframework:spring-webflux")
+    compileOnly("io.projectreactor:reactor-core")
+
+    // @Idempotent annotation AOP advisor — optional, activated when
+    // spring-aop is on the classpath (transitive via spring-boot-starter-aop
+    // when the consumer pulls it in).
+    compileOnly("org.springframework:spring-aop")
+    compileOnly("org.aspectj:aspectjweaver")
+    // Jackson is used by the annotation aspect to serialise method return
+    // values into the store. compileOnly — every Spring Boot web app already
+    // has it via spring-boot-starter-json.
+    compileOnly("com.fasterxml.jackson.core:jackson-databind")
 
     // JDBC backend — optional, activated when a DataSource bean is present.
     compileOnly("org.springframework:spring-jdbc")
@@ -63,6 +80,8 @@ dependencies {
         exclude(group = "ch.qos.logback") // we use logback-classic via spring-boot-starter
     }
     testImplementation("org.springframework.boot:spring-boot-starter-web")
+    testImplementation("org.springframework.boot:spring-boot-starter-webflux")
+    testImplementation("org.springframework.boot:spring-boot-starter-aop")
     testImplementation("org.springframework.boot:spring-boot-starter-data-redis")
     testImplementation("org.springframework.boot:spring-boot-starter-jdbc")
     testImplementation("com.h2database:h2") // in-memory JDBC for unit IT
@@ -71,6 +90,13 @@ dependencies {
     testImplementation("org.testcontainers:postgresql")
     testImplementation("org.testcontainers:junit-jupiter")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+}
+
+tasks.withType<JavaCompile> {
+    // Embed parameter names so SpEL expressions like `#request.orderId` in
+    // @Idempotent can resolve method args by name (Spring's
+    // DefaultParameterNameDiscoverer reads this metadata first).
+    options.compilerArgs.add("-parameters")
 }
 
 tasks.withType<Test> {
