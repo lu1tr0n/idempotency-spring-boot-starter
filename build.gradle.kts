@@ -102,6 +102,9 @@ dependencies {
     testImplementation("org.springframework.boot:spring-boot-starter-data-redis")
     testImplementation("org.springframework.boot:spring-boot-starter-jdbc")
     testImplementation("io.micrometer:micrometer-observation-test") // TestObservationRegistry
+    testImplementation("org.flywaydb:flyway-core")                  // apply the shipped Flyway script in tests
+    testImplementation("org.flywaydb:flyway-database-postgresql")   // Flyway 10+ Postgres support module
+    testImplementation("org.liquibase:liquibase-core")              // apply the shipped Liquibase changelog in tests
     testImplementation("com.h2database:h2") // in-memory JDBC for unit IT
     testImplementation("org.postgresql:postgresql") // real driver for Testcontainers Postgres IT
     testImplementation("org.springframework.boot:spring-boot-testcontainers")

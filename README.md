@@ -69,6 +69,34 @@ That's it. Every `POST`/`PUT`/`PATCH` that carries an `Idempotency-Key` header i
 
 Schema is in [`schema-postgres.sql`](src/main/resources/io/github/lu1tr0n/idempotency/jdbc/schema-postgres.sql). Set it up with your preferred migration tool, or enable `spring.idempotency.jdbc.auto-create-table=true` for tests.
 
+#### Migrations (Flyway / Liquibase)
+
+The starter bundles ready-made PostgreSQL migration artifacts. They live **off** the default auto-discovered paths, so they never merge into — or collide with — your own migration pipeline. Opt in explicitly:
+
+**Flyway** — either reference the bundled location, or (recommended) copy the DDL into your own migration tree so you own the version number:
+
+```properties
+# option A: reference the bundled script
+spring.flyway.locations=classpath:db/migration,classpath:db/idempotency/flyway/postgresql
+```
+```text
+# option B (recommended): copy db/idempotency/flyway/postgresql/*.sql into
+# src/main/resources/db/migration/V<your-next-version>__create_idempotency_records.sql
+```
+
+**Liquibase** — include the bundled changelog from your master:
+
+```xml
+<include file="db/idempotency/liquibase/db.changelog-idempotency.sql"/>
+```
+
+Notes:
+- The artifacts hardcode the default table name `idempotency_records` (rename them if you override `spring.idempotency.jdbc.table-name`).
+- Never edit a migration after it has been applied — both tools checksum it; ship changes as a new version/changeset.
+- Only PostgreSQL is shipped. For MySQL, map `BYTEA → LONGBLOB`, `TIMESTAMP WITH TIME ZONE → DATETIME(6)` (and drop the `DEFAULT '{}'` on `response_headers` — MySQL rejects a literal default on `TEXT`; the store always writes the column explicitly). Pin the JDBC connection to UTC, since `DATETIME` is timezone-naive and the store works in UTC instants.
+- The starter does not auto-evict — schedule `DELETE FROM idempotency_records WHERE expires_at < NOW()` (the `expires_at` index makes the sweep cheap).
+- Records hold full HTTP response bodies + headers, which may contain sensitive data (PII, `Set-Cookie` / `Authorization`). Use database encryption-at-rest and keep the TTL tight if that applies to you.
+
 The JDBC backend is the right choice when:
 - You already run PostgreSQL and don't want to add Redis just for idempotency.
 - You want idempotency state to be transactionally consistent with the rest of your write.
@@ -146,15 +174,13 @@ public void health() { ... }
 - **v0.0.2.1 (current)** — critical fixes: filter wiring on JDBC/Redis backends, 4xx response body replay, per-platform JDBC schema (Postgres/H2), TTL-expired record steal, in-memory auto-config, `default-ttl` alias.
 - **v0.0.3** — `@Idempotent` annotation AOP wiring, WebFlux filter, async / `Mono` / `CompletableFuture` support.
 - **v0.0.4** — Security & standards hardening:
+  - RFC 8941 sf-string parsing (strip surrounding quotes — forward-compat with IETF draft -08+)
   - Composite key with authenticated principal (IETF draft §5 data-leak mitigation)
   - `@RequireIdempotencyKey` — enforce the key on selected endpoints (IETF §2.7 missing-key → 400)
   - Request- and response-body size caps (DoS protection)
   - Configurable non-cacheable response statuses (release the lock so a corrected retry reuses the key)
-  - Micrometer Observation instrumentation (per-outcome span + counter; OpenTelemetry / Brave; servlet)
-  - `@RequireIdempotencyKey` annotation (IETF §2.7 missing-key 400)
-  - RFC 8941 sf-string parsing (strip surrounding quotes — forward-compat with IETF draft -08+)
-  - Distributed tracing propagation (OpenTelemetry / Brave)
-  - Flyway / Liquibase migration script
+  - Distributed tracing / metrics via Micrometer Observation (per-outcome span + counter; OpenTelemetry / Brave; servlet)
+  - Flyway / Liquibase migration scripts (PostgreSQL)
 - **v0.0.5** — Operability:
   - Micrometer metrics + Spring Boot Actuator health indicator
   - Two-clock TTL (separate in-progress lock TTL vs response record TTL — AWS Powertools pattern)

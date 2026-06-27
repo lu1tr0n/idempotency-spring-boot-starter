@@ -35,10 +35,13 @@ CREATE TABLE IF NOT EXISTS idempotency_records (
     created_at            TIMESTAMP WITH TIME ZONE NOT NULL,
     expires_at            TIMESTAMP WITH TIME ZONE NOT NULL,
 
-    -- Lock state — when a row is INSERTed with NULL response columns, that
-    -- row IS the lock. Once the protected operation completes and the
-    -- response is filled in, the lock is implicitly released (any read
-    -- sees the populated response and returns it instead of waiting).
+    -- Lock state. A row whose lock_token IS NOT NULL (with locked_until in
+    -- the future) is an in-flight request holding the lock. save() sets
+    -- lock_token = NULL, which is the ONLY completion discriminator: a row
+    -- with lock_token IS NULL and expires_at in the future is a completed
+    -- request eligible for replay. response_body is NOT NULL and is never a
+    -- discriminator — lock rows carry an empty body (byte[0]), and so do real
+    -- 204/304 responses.
     lock_token            VARCHAR(64),
     locked_until          TIMESTAMP WITH TIME ZONE
 );
