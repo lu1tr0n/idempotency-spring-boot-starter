@@ -3,10 +3,13 @@ package io.github.lu1tr0n.idempotency.autoconfigure;
 import io.github.lu1tr0n.idempotency.core.HeaderIdempotencyKeyResolver;
 import io.github.lu1tr0n.idempotency.core.IdempotencyKeyResolver;
 import io.github.lu1tr0n.idempotency.core.IdempotencyStore;
+import io.github.lu1tr0n.idempotency.observability.IdempotencyObservations;
 import io.github.lu1tr0n.idempotency.principal.IdempotencyPrincipalResolver;
 import io.github.lu1tr0n.idempotency.principal.PrincipalScopingKeyResolver;
 import io.github.lu1tr0n.idempotency.servlet.IdempotencyFilter;
 import io.github.lu1tr0n.idempotency.servlet.RequireIdempotencyKeyInterceptor;
+
+import io.micrometer.observation.ObservationRegistry;
 
 import jakarta.servlet.http.HttpServletRequest;
 
@@ -76,11 +79,13 @@ public class IdempotencyAutoConfiguration {
     public IdempotencyFilter idempotencyFilter(IdempotencyStore store,
                                                ObjectProvider<IdempotencyKeyResolver> resolverProvider,
                                                ObjectProvider<IdempotencyPrincipalResolver> principalProvider,
+                                               ObjectProvider<IdempotencyObservations> observationsProvider,
                                                IdempotencyProperties properties) {
         IdempotencyKeyResolver resolver = resolverProvider.getIfAvailable(
             () -> new HeaderIdempotencyKeyResolver(properties.getHeaderName()));
         resolver = applyPrincipalBinding(resolver, principalProvider, properties);
-        return new IdempotencyFilter(store, resolver, properties);
+        IdempotencyObservations observations = observationsProvider.getIfAvailable(IdempotencyObservations::noop);
+        return new IdempotencyFilter(store, resolver, properties, observations);
     }
 
     /**
@@ -155,6 +160,28 @@ public class IdempotencyAutoConfiguration {
         @Override
         public void addInterceptors(InterceptorRegistry registry) {
             registry.addInterceptor(interceptor).addPathPatterns("/**");
+        }
+    }
+
+    /**
+     * Wires the {@link IdempotencyObservations} collaborator when the Micrometer
+     * Observation API is on the classpath (it ships transitively with
+     * spring-web). The {@link ObservationRegistry} bean only exists when the
+     * consumer has Actuator / a tracer; absent that, we fall back to
+     * {@link ObservationRegistry#NOOP} so instrumentation is a free no-op.
+     */
+    @Configuration(proxyBeanMethods = false)
+    @ConditionalOnClass(ObservationRegistry.class)
+    @ConditionalOnProperty(prefix = "spring.idempotency.observations", name = "enabled",
+        havingValue = "true", matchIfMissing = true)
+    static class IdempotencyObservationsConfiguration {
+
+        @Bean
+        @ConditionalOnMissingBean
+        IdempotencyObservations idempotencyObservations(ObjectProvider<ObservationRegistry> registryProvider,
+                                                        IdempotencyProperties properties) {
+            ObservationRegistry registry = registryProvider.getIfAvailable(() -> ObservationRegistry.NOOP);
+            return new IdempotencyObservations(registry, properties.getObservations().isEnabled());
         }
     }
 }

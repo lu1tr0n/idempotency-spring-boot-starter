@@ -135,6 +135,8 @@ public void health() { ... }
 
 `spring.idempotency.max-response-size` (default `1MB`) — maximum response body buffered to snapshot into the store. A larger response is streamed to the client in full but is **not cached** (the lock is released, logged at `WARN`), so a retry re-executes the handler. Raise it for endpoints that legitimately return large responses; set to `-1` to disable. Response *headers* are not bounded by this.
 
+`spring.idempotency.observations.enabled` (default `true`) — emit a Micrometer observation per idempotency outcome (`idempotency.outcome` = replayed / executed_stored / lock_held / payload_mismatch / payload_too_large / executed_not_stored, plus `idempotency.status`). Produces a span when a tracer (OpenTelemetry or Brave) is wired and an `idempotency` counter when a meter registry is — a free no-op otherwise. The idempotency key and principal are never emitted (PII / cardinality). Servlet only for now.
+
 `spring.idempotency.non-cacheable-statuses` (default empty) — handler response statuses that are *not* saved as the idempotency record; the lock is released so the same key is reusable on a corrected retry. A sensible opt-in set is `400,401,403,429` (the operation never committed). Leave committed outcomes (`402`/`404`/`409`/`422`) out so they keep replaying. Note: unlike Stripe — which caches executed errors and expects a fresh key — a released key carries no stored payload hash, so a corrected retry may use a different body.
 
 ## Roadmap
@@ -148,6 +150,7 @@ public void health() { ... }
   - `@RequireIdempotencyKey` — enforce the key on selected endpoints (IETF §2.7 missing-key → 400)
   - Request- and response-body size caps (DoS protection)
   - Configurable non-cacheable response statuses (release the lock so a corrected retry reuses the key)
+  - Micrometer Observation instrumentation (per-outcome span + counter; OpenTelemetry / Brave; servlet)
   - `@RequireIdempotencyKey` annotation (IETF §2.7 missing-key 400)
   - RFC 8941 sf-string parsing (strip surrounding quotes — forward-compat with IETF draft -08+)
   - Distributed tracing propagation (OpenTelemetry / Brave)

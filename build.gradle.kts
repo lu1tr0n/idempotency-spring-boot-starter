@@ -78,6 +78,14 @@ dependencies {
     // (servlet) and ReactiveSecurityContextHolder (WebFlux).
     compileOnly("org.springframework.security:spring-security-core")
 
+    // Tracing / metrics — optional. We instrument via the Micrometer
+    // Observation API, which bridges to BOTH OpenTelemetry and Brave through
+    // micrometer-tracing. compileOnly + an ObservationRegistry.NOOP fallback so
+    // an app with no Actuator / tracer is completely unaffected. (In practice
+    // micrometer-observation is already a transitive of spring-web, but we
+    // declare it first-class to make the dependency intentional.)
+    compileOnly("io.micrometer:micrometer-observation")
+
     // Generates additional-spring-configuration-metadata.json so IDEs
     // (IntelliJ, VS Code) can autocomplete our properties in application.yml.
     annotationProcessor("org.springframework.boot:spring-boot-configuration-processor")
@@ -93,6 +101,7 @@ dependencies {
     testImplementation("org.springframework.security:spring-security-test")     // mockUser / SecurityMockServerConfigurers
     testImplementation("org.springframework.boot:spring-boot-starter-data-redis")
     testImplementation("org.springframework.boot:spring-boot-starter-jdbc")
+    testImplementation("io.micrometer:micrometer-observation-test") // TestObservationRegistry
     testImplementation("com.h2database:h2") // in-memory JDBC for unit IT
     testImplementation("org.postgresql:postgresql") // real driver for Testcontainers Postgres IT
     testImplementation("org.springframework.boot:spring-boot-testcontainers")

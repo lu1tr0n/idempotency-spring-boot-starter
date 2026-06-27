@@ -6,6 +6,8 @@ import io.github.lu1tr0n.idempotency.core.IdempotencyKeyResolver;
 import io.github.lu1tr0n.idempotency.core.IdempotencyRecord;
 import io.github.lu1tr0n.idempotency.core.IdempotencyStore;
 import io.github.lu1tr0n.idempotency.core.PayloadHasher;
+import io.github.lu1tr0n.idempotency.observability.IdempotencyObservations;
+import io.github.lu1tr0n.idempotency.observability.IdempotencyObservations.Outcome;
 
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -82,13 +84,22 @@ public class IdempotencyFilter extends OncePerRequestFilter {
     private final Set<String> trackedMethods;
     private final int maxBodyBytes;
     private final int maxResponseBytes;
+    private final IdempotencyObservations observations;
 
     public IdempotencyFilter(IdempotencyStore store,
                              IdempotencyKeyResolver keyResolver,
                              IdempotencyProperties properties) {
+        this(store, keyResolver, properties, IdempotencyObservations.noop());
+    }
+
+    public IdempotencyFilter(IdempotencyStore store,
+                             IdempotencyKeyResolver keyResolver,
+                             IdempotencyProperties properties,
+                             IdempotencyObservations observations) {
         this.store = store;
         this.keyResolver = keyResolver;
         this.properties = properties;
+        this.observations = observations;
         // Pre-normalise once instead of upper-casing per request.
         this.trackedMethods = Set.copyOf(properties.getMethods().stream()
             .map(m -> m.toUpperCase(Locale.ROOT))
@@ -168,6 +179,7 @@ public class IdempotencyFilter extends OncePerRequestFilter {
             // Reject before any store work — no record, no lock. This is a
             // client error, independent of the fail-open/closed store strategy.
             writeJsonError(response, 413, "IDEMPOTENCY_PAYLOAD_TOO_LARGE", tooLarge.getMessage());
+            observations.record(Outcome.PAYLOAD_TOO_LARGE, 413);
             return;
         }
 
@@ -194,9 +206,11 @@ public class IdempotencyFilter extends OncePerRequestFilter {
                 response.setHeader("Idempotency-Mismatch", "true");
                 writeJsonError(response, 422, "IDEMPOTENCY_KEY_MISMATCH",
                     "The supplied Idempotency-Key was previously used with a different request payload.");
+                observations.record(Outcome.PAYLOAD_MISMATCH, 422);
                 return;
             }
             replay(cached, response);
+            observations.record(Outcome.REPLAYED, cached.statusCode());
             return;
         }
 
@@ -213,6 +227,7 @@ public class IdempotencyFilter extends OncePerRequestFilter {
             response.setHeader("Retry-After", "1");
             writeJsonError(response, HttpServletResponse.SC_CONFLICT, "IDEMPOTENCY_LOCK_HELD",
                 "Another in-flight request holds the lock for this Idempotency-Key. Retry after a short backoff.");
+            observations.record(Outcome.LOCK_HELD, HttpServletResponse.SC_CONFLICT);
             return;
         }
 
@@ -239,6 +254,7 @@ public class IdempotencyFilter extends OncePerRequestFilter {
             log.debug("Skipping idempotency cache (key={}, status={}); releasing lock.",
                 key.value(), capturedStatus);
             releaseAfterSkip(key, token);
+            observations.record(Outcome.EXECUTED_NOT_STORED, capturedStatus);
             return;
         }
 
@@ -252,6 +268,7 @@ public class IdempotencyFilter extends OncePerRequestFilter {
                     + "A retry will re-execute the handler — raise spring.idempotency.max-response-size if this "
                     + "endpoint legitimately returns large responses.", key.value(), capturedStatus);
             releaseAfterSkip(key, token);
+            observations.record(Outcome.EXECUTED_NOT_STORED, capturedStatus);
             return;
         }
 
@@ -259,6 +276,7 @@ public class IdempotencyFilter extends OncePerRequestFilter {
         try {
             IdempotencyRecord record = snapshot(key, payloadHash, capturing);
             store.save(record, token);
+            observations.record(Outcome.EXECUTED_STORED, capturedStatus);
         } catch (IdempotencyStore.StoreException storeFailure) {
             // The user has already seen the response — the chain wrote to the
             // wrapped response which tees to the real one. We can no longer
@@ -266,6 +284,8 @@ public class IdempotencyFilter extends OncePerRequestFilter {
             // on; the lock will expire on its own.
             log.warn("Idempotency record save failed after successful response (key={}). Lock will expire after {}.",
                 key.value(), properties.getLockTimeout(), storeFailure);
+            // The handler ran but the response could not be persisted.
+            observations.record(Outcome.EXECUTED_NOT_STORED, capturedStatus);
         }
     }
 

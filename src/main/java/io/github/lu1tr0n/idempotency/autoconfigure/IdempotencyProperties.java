@@ -92,6 +92,9 @@ public class IdempotencyProperties {
      */
     private PayloadValidation payloadValidation = PayloadValidation.ENABLED;
 
+    /** Observation (tracing + metrics) configuration. */
+    private final Observations observations = new Observations();
+
     /** JDBC-specific configuration. */
     private final Jdbc jdbc = new Jdbc();
 
@@ -245,6 +248,7 @@ public class IdempotencyProperties {
     public void setMethods(Set<String> methods) { this.methods = methods; }
     public PayloadValidation getPayloadValidation() { return payloadValidation; }
     public void setPayloadValidation(PayloadValidation pv) { this.payloadValidation = pv; }
+    public Observations getObservations() { return observations; }
     public Jdbc getJdbc() { return jdbc; }
     public Redis getRedis() { return redis; }
     public boolean isCache5xx() { return cache5xx; }
@@ -309,6 +313,26 @@ public class IdempotencyProperties {
     public enum FailureStrategy { FAIL_OPEN, FAIL_CLOSED }
     public enum PayloadValidation { ENABLED, DISABLED }
     public enum PrincipalBinding { AUTO, DISABLED, REQUIRED }
+
+    /**
+     * Observation (tracing + metrics) knobs. Instrumentation runs through the
+     * Micrometer Observation API, so it emits both a span (when a tracer —
+     * OpenTelemetry or Brave — is wired) and an {@code idempotency} timer/counter
+     * tagged by outcome (when a meter registry is wired). With neither, the
+     * registry is {@code NOOP} and this is free.
+     */
+    public static class Observations {
+        /**
+         * Master switch for idempotency observations. Default {@code true}; it
+         * is already a no-op without an {@code ObservationRegistry} bean, so this
+         * only matters to hard-disable instrumentation even when a tracer/meter
+         * registry is present.
+         */
+        private boolean enabled = true;
+
+        public boolean isEnabled() { return enabled; }
+        public void setEnabled(boolean enabled) { this.enabled = enabled; }
+    }
 
     /** JDBC-specific knobs. */
     public static class Jdbc {
