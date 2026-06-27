@@ -17,7 +17,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
@@ -319,33 +318,11 @@ public class IdempotencyFilter extends OncePerRequestFilter {
     }
 
     private void writeJsonError(HttpServletResponse response, int status, String code, String message) throws IOException {
-        response.setStatus(status);
-        response.setContentType("application/json;charset=UTF-8");
-        String body = "{\"error\":{\"code\":\"" + code + "\",\"message\":\"" + escapeJson(message) + "\"}}";
-        response.getOutputStream().write(body.getBytes(StandardCharsets.UTF_8));
-        response.getOutputStream().flush();
-        // Same rationale as replay(): commit the response so Spring Boot's
-        // ErrorPageFilter does not forward a 4xx/5xx to /error (which would
-        // overwrite our structured error body with the default error page).
-        if (!response.isCommitted()) {
-            response.flushBuffer();
-        }
-    }
-
-    private static String escapeJson(String s) {
-        StringBuilder sb = new StringBuilder(s.length() + 8);
-        for (int i = 0; i < s.length(); i++) {
-            char c = s.charAt(i);
-            switch (c) {
-                case '"': sb.append("\\\""); break;
-                case '\\': sb.append("\\\\"); break;
-                case '\n': sb.append("\\n"); break;
-                case '\r': sb.append("\\r"); break;
-                case '\t': sb.append("\\t"); break;
-                default: sb.append(c);
-            }
-        }
-        return sb.toString();
+        // Same rationale as replay(): the shared writer commits the response so
+        // Spring Boot's ErrorPageFilter does not forward a 4xx/5xx to /error
+        // (which would overwrite our structured error body with the default
+        // error page).
+        IdempotencyHttpErrors.write(response, status, code, message);
     }
 
     @SuppressWarnings("unchecked")

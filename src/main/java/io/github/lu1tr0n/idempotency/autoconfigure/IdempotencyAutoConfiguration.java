@@ -6,6 +6,7 @@ import io.github.lu1tr0n.idempotency.core.IdempotencyStore;
 import io.github.lu1tr0n.idempotency.principal.IdempotencyPrincipalResolver;
 import io.github.lu1tr0n.idempotency.principal.PrincipalScopingKeyResolver;
 import io.github.lu1tr0n.idempotency.servlet.IdempotencyFilter;
+import io.github.lu1tr0n.idempotency.servlet.RequireIdempotencyKeyInterceptor;
 
 import jakarta.servlet.http.HttpServletRequest;
 
@@ -17,9 +18,12 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
+import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
 /**
  * Top-level auto-configuration entry point. Activated by
@@ -111,5 +115,46 @@ public class IdempotencyAutoConfiguration {
         return new PrincipalScopingKeyResolver(
             resolver, principalResolver,
             binding == IdempotencyProperties.PrincipalBinding.REQUIRED);
+    }
+
+    /**
+     * Registers the {@code HandlerInterceptor} that enforces
+     * {@link io.github.lu1tr0n.idempotency.annotation.RequireIdempotencyKey} on
+     * Spring MVC endpoints. Independent of the store — the interceptor only
+     * needs the configured header name — so it activates whenever Spring MVC is
+     * present, even in apps that wire their own store. The interceptor no-ops
+     * unless the resolved handler carries the annotation, so registering it on
+     * {@code /**} is cheap.
+     *
+     * <p>Kept as a nested {@code @Configuration} so the {@code @ConditionalOn*}
+     * surface stays in this one file, per the package convention.
+     */
+    @Configuration(proxyBeanMethods = false)
+    @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
+    @ConditionalOnClass(WebMvcConfigurer.class)
+    static class RequireIdempotencyKeyWebMvcConfiguration implements WebMvcConfigurer {
+
+        private final RequireIdempotencyKeyInterceptor interceptor;
+
+        RequireIdempotencyKeyWebMvcConfiguration(RequireIdempotencyKeyInterceptor interceptor) {
+            this.interceptor = interceptor;
+        }
+
+        /**
+         * Exposed as an overridable bean — same convention as
+         * {@code idempotencyKeyResolver} / {@code idempotencyFilter} — so a user
+         * can replace the enforcement (e.g. a different missing-key status) by
+         * defining their own {@link RequireIdempotencyKeyInterceptor} bean.
+         */
+        @Bean
+        @ConditionalOnMissingBean
+        static RequireIdempotencyKeyInterceptor requireIdempotencyKeyInterceptor(IdempotencyProperties properties) {
+            return new RequireIdempotencyKeyInterceptor(properties);
+        }
+
+        @Override
+        public void addInterceptors(InterceptorRegistry registry) {
+            registry.addInterceptor(interceptor).addPathPatterns("/**");
+        }
     }
 }
