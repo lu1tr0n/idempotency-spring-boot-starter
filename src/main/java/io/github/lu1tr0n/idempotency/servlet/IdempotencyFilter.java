@@ -81,6 +81,7 @@ public class IdempotencyFilter extends OncePerRequestFilter {
     private final IdempotencyProperties properties;
     private final Set<String> trackedMethods;
     private final int maxBodyBytes;
+    private final int maxResponseBytes;
 
     public IdempotencyFilter(IdempotencyStore store,
                              IdempotencyKeyResolver keyResolver,
@@ -92,8 +93,9 @@ public class IdempotencyFilter extends OncePerRequestFilter {
         this.trackedMethods = Set.copyOf(properties.getMethods().stream()
             .map(m -> m.toUpperCase(Locale.ROOT))
             .toList());
-        // Resolve the body ceiling once (-1 = unbounded).
+        // Resolve the body ceilings once (-1 = unbounded).
         this.maxBodyBytes = properties.effectiveMaxBodyBytes();
+        this.maxResponseBytes = properties.effectiveMaxResponseBytes();
     }
 
     @Override
@@ -216,7 +218,7 @@ public class IdempotencyFilter extends OncePerRequestFilter {
 
         // Execute the chain and snapshot the response.
         IdempotencyStore.LockToken token = lock.get();
-        CapturingHttpServletResponseWrapper capturing = new CapturingHttpServletResponseWrapper(response);
+        CapturingHttpServletResponseWrapper capturing = new CapturingHttpServletResponseWrapper(response, maxResponseBytes);
         boolean chainThrew = false;
         try {
             chain.doFilter(cachedRequest, capturing);
@@ -236,12 +238,20 @@ public class IdempotencyFilter extends OncePerRequestFilter {
         if (!properties.shouldCache(capturedStatus)) {
             log.debug("Skipping idempotency cache (key={}, status={}); releasing lock.",
                 key.value(), capturedStatus);
-            try {
-                store.releaseLock(key, token);
-            } catch (IdempotencyStore.StoreException releaseFailure) {
-                log.warn("Failed to release lock after non-cacheable status (key={}). Lock will expire after {}.",
-                    key.value(), properties.getLockTimeout(), releaseFailure);
-            }
+            releaseAfterSkip(key, token);
+            return;
+        }
+
+        // Response exceeded max-response-size: the client already received the
+        // full body (the wrapper tees unconditionally) but the snapshot was
+        // abandoned to bound memory, so there is nothing to cache. Release the
+        // lock — a retry re-executes. WARN, not debug: this silently disables
+        // idempotency for the key, which operators should see.
+        if (capturing.isOverCap()) {
+            log.warn("Response exceeded max-response-size (key={}, status={}); not caching, releasing lock. "
+                    + "A retry will re-execute the handler — raise spring.idempotency.max-response-size if this "
+                    + "endpoint legitimately returns large responses.", key.value(), capturedStatus);
+            releaseAfterSkip(key, token);
             return;
         }
 
@@ -256,6 +266,16 @@ public class IdempotencyFilter extends OncePerRequestFilter {
             // on; the lock will expire on its own.
             log.warn("Idempotency record save failed after successful response (key={}). Lock will expire after {}.",
                 key.value(), properties.getLockTimeout(), storeFailure);
+        }
+    }
+
+    /** Release the lock for a response we chose not to cache, warning if the release itself fails. */
+    private void releaseAfterSkip(IdempotencyKey key, IdempotencyStore.LockToken token) {
+        try {
+            store.releaseLock(key, token);
+        } catch (IdempotencyStore.StoreException releaseFailure) {
+            log.warn("Failed to release lock after skipping cache (key={}). Lock will expire after {}.",
+                key.value(), properties.getLockTimeout(), releaseFailure);
         }
     }
 

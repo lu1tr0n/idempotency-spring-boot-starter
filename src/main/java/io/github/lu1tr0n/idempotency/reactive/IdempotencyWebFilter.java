@@ -75,6 +75,7 @@ public class IdempotencyWebFilter implements WebFilter, Ordered {
     private final Set<String> trackedMethods;
     private final ReactiveIdempotencyPrincipalResolver principalResolver;
     private final int maxBodyBytes;
+    private final int maxResponseBytes;
 
     public IdempotencyWebFilter(IdempotencyStore store, IdempotencyProperties properties) {
         this(store, properties, null);
@@ -89,6 +90,7 @@ public class IdempotencyWebFilter implements WebFilter, Ordered {
             .map(m -> m.toUpperCase(Locale.ROOT))
             .toList());
         this.maxBodyBytes = properties.effectiveMaxBodyBytes();
+        this.maxResponseBytes = properties.effectiveMaxResponseBytes();
     }
 
     private boolean principalBindingActive() {
@@ -197,7 +199,7 @@ public class IdempotencyWebFilter implements WebFilter, Ordered {
         }
 
         IdempotencyStore.LockToken token = lock.get();
-        CapturingResponseDecorator capturing = new CapturingResponseDecorator(exchange.getResponse());
+        CapturingResponseDecorator capturing = new CapturingResponseDecorator(exchange.getResponse(), maxResponseBytes);
         ServerHttpRequest cachedRequest = new CachedBodyServerHttpRequestDecorator(original, bodyBytes);
         ServerWebExchange mutated = exchange.mutate().request(cachedRequest).response(capturing).build();
 
@@ -211,6 +213,13 @@ public class IdempotencyWebFilter implements WebFilter, Ordered {
         int status = capturing.statusValue();
         if (!properties.shouldCache(status)) {
             log.debug("WebFlux idempotency skip cache (key={}, status={})", key.value(), status);
+            safeReleaseLock(key, token);
+            return;
+        }
+        if (capturing.isOverCap()) {
+            log.warn("WebFlux response exceeded max-response-size (key={}, status={}); not caching, releasing lock. "
+                    + "A retry will re-execute — raise spring.idempotency.max-response-size for large-response endpoints.",
+                key.value(), status);
             safeReleaseLock(key, token);
             return;
         }
@@ -326,10 +335,14 @@ public class IdempotencyWebFilter implements WebFilter, Ordered {
     // === Response decorator: captures the body for store snapshot. ===
 
     private static final class CapturingResponseDecorator extends ServerHttpResponseDecorator {
-        private final java.io.ByteArrayOutputStream buffer = new java.io.ByteArrayOutputStream(1024);
+        private java.io.ByteArrayOutputStream buffer = new java.io.ByteArrayOutputStream(1024);
+        private final int maxResponseBytes;
+        private long capturedBytes = 0;
+        private boolean overCap = false;
 
-        CapturingResponseDecorator(ServerHttpResponse delegate) {
+        CapturingResponseDecorator(ServerHttpResponse delegate, int maxResponseBytes) {
             super(delegate);
+            this.maxResponseBytes = maxResponseBytes;
         }
 
         @Override
@@ -347,14 +360,43 @@ public class IdempotencyWebFilter implements WebFilter, Ordered {
             try {
                 byte[] bytes = new byte[dataBuffer.readableByteCount()];
                 dataBuffer.read(bytes);
-                buffer.write(bytes, 0, bytes.length);
+                // Always copy + forward to the client; only the capture write is
+                // gated, and we never branch the buffer handling (one release
+                // regime: the source is released in finally, the copy goes
+                // downstream). This keeps the client stream byte-identical.
+                capture(bytes);
                 return getDelegate().bufferFactory().wrap(bytes);
             } finally {
                 DataBufferUtils.release(dataBuffer);
             }
         }
 
+        private void capture(byte[] bytes) {
+            if (overCap) {
+                return;
+            }
+            if (maxResponseBytes < 0) {
+                buffer.write(bytes, 0, bytes.length);
+                return;
+            }
+            if (capturedBytes + bytes.length > maxResponseBytes) {
+                overCap = true;
+                buffer = null; // drop the partial snapshot so it is GC'd
+                return;
+            }
+            buffer.write(bytes, 0, bytes.length);
+            capturedBytes += bytes.length;
+        }
+
+        boolean isOverCap() {
+            return overCap;
+        }
+
         byte[] capturedBody() {
+            if (overCap || buffer == null) {
+                throw new IllegalStateException(
+                    "capturedBody() called on an over-cap response; gate on isOverCap() and do not cache it.");
+            }
             return buffer.toByteArray();
         }
 

@@ -29,17 +29,74 @@ import java.io.PrintWriter;
  *   <li>Captures the writer / stream chosen by the application — using both
  *       throws {@link IllegalStateException} per the servlet spec.</li>
  *   <li>Does NOT support reset (call {@link #reset()} → buffer is cleared).</li>
+ *   <li>Bounds the captured copy at {@code maxResponseBytes}: once the response
+ *       exceeds it the partial buffer is <strong>dropped</strong> (the
+ *       reference is released so the memory is freed, not merely
+ *       {@code reset()}) and {@link #isOverCap()} flips. Bytes keep streaming to
+ *       the client unchanged; only the in-memory snapshot is abandoned, so the
+ *       filter declines to cache the response.</li>
  * </ul>
  */
 public class CapturingHttpServletResponseWrapper extends HttpServletResponseWrapper {
 
-    private final ByteArrayOutputStream buffer = new ByteArrayOutputStream(1024);
+    private ByteArrayOutputStream buffer = new ByteArrayOutputStream(1024);
     private ServletOutputStream cachingStream;
     private PrintWriter cachingWriter;
     private int capturedStatus = HttpServletResponse.SC_OK;
 
+    /** Inclusive ceiling on the captured copy; {@code -1} = unbounded. */
+    private final int maxResponseBytes;
+    private long capturedBytes = 0;
+    private boolean overCap = false;
+
     public CapturingHttpServletResponseWrapper(HttpServletResponse response) {
+        this(response, -1);
+    }
+
+    public CapturingHttpServletResponseWrapper(HttpServletResponse response, int maxResponseBytes) {
         super(response);
+        this.maxResponseBytes = maxResponseBytes;
+    }
+
+    /**
+     * Append to the capture buffer unless doing so would exceed the cap. On the
+     * first overflowing write the buffer reference is dropped to free the
+     * already-accumulated bytes and {@link #overCap} latches — subsequent writes
+     * are no-ops for the capture (the client copy is teed separately).
+     */
+    private void capture(byte[] b, int off, int len) {
+        if (overCap) {
+            return;
+        }
+        if (maxResponseBytes < 0) {
+            buffer.write(b, off, len);
+            return;
+        }
+        if (capturedBytes + len > maxResponseBytes) {
+            overCap = true;
+            buffer = null; // drop the reference so the partial snapshot is GC'd
+            return;
+        }
+        buffer.write(b, off, len);
+        capturedBytes += len;
+    }
+
+    /** Single-byte variant of {@link #capture(byte[], int, int)}. */
+    private void captureByte(int b) {
+        if (overCap) {
+            return;
+        }
+        if (maxResponseBytes < 0) {
+            buffer.write(b);
+            return;
+        }
+        if (capturedBytes + 1 > maxResponseBytes) {
+            overCap = true;
+            buffer = null;
+            return;
+        }
+        buffer.write(b);
+        capturedBytes += 1;
     }
 
     @Override
@@ -71,13 +128,13 @@ public class CapturingHttpServletResponseWrapper extends HttpServletResponseWrap
                 public void setWriteListener(WriteListener listener) { delegate.setWriteListener(listener); }
                 @Override
                 public void write(int b) throws IOException {
-                    delegate.write(b);
-                    buffer.write(b);
+                    delegate.write(b);             // client copy first, unconditional
+                    captureByte(b);
                 }
                 @Override
                 public void write(byte[] b, int off, int len) throws IOException {
-                    delegate.write(b, off, len);
-                    buffer.write(b, off, len);
+                    delegate.write(b, off, len);   // client copy first, unconditional
+                    capture(b, off, len);
                 }
                 @Override
                 public void flush() throws IOException { delegate.flush(); }
@@ -95,12 +152,13 @@ public class CapturingHttpServletResponseWrapper extends HttpServletResponseWrap
             cachingWriter = new PrintWriter(new java.io.Writer() {
                 @Override
                 public void write(char[] cbuf, int off, int len) throws IOException {
-                    delegate.write(cbuf, off, len);
-                    // Encode chars to the response's character encoding so
-                    // the byte buffer matches what the client actually sees.
+                    delegate.write(cbuf, off, len);   // client copy first, unconditional
+                    // Encode chars to the response's character encoding so the
+                    // captured bytes (and the cap accounting) match what the
+                    // client actually sees on the wire.
                     byte[] bytes = new String(cbuf, off, len)
                         .getBytes(getCharacterEncoding() != null ? getCharacterEncoding() : "UTF-8");
-                    buffer.write(bytes, 0, bytes.length);
+                    capture(bytes, 0, bytes.length);
                 }
                 @Override public void flush() throws IOException { delegate.flush(); }
                 @Override public void close() throws IOException { delegate.close(); }
@@ -112,16 +170,52 @@ public class CapturingHttpServletResponseWrapper extends HttpServletResponseWrap
     @Override
     public void reset() {
         super.reset();
-        buffer.reset();
+        rearmCapture();
         capturedStatus = HttpServletResponse.SC_OK;
     }
 
-    /** Returns the bytes the application wrote to the response. */
+    @Override
+    public void resetBuffer() {
+        super.resetBuffer();
+        // resetBuffer() discards the unwritten response body but keeps status /
+        // headers. Mirror that on the capture side, or the snapshot would retain
+        // bytes the client never received. Status is intentionally left as-is.
+        rearmCapture();
+    }
+
+    /** Re-arm the capture buffer from scratch (it may have been dropped on overflow). */
+    private void rearmCapture() {
+        buffer = new ByteArrayOutputStream(1024);
+        capturedBytes = 0;
+        overCap = false;
+    }
+
+    /**
+     * Returns the bytes the application wrote to the response. Callers must gate
+     * on {@link #isOverCap()} first: an over-cap response has no faithful
+     * snapshot, so this throws rather than hand back a misleading partial/empty
+     * body that could be cached and replayed.
+     *
+     * @throws IllegalStateException if {@link #isOverCap()} is {@code true}
+     */
     public byte[] capturedBody() {
+        // Flush first — a final flush can push the capture over the cap.
         if (cachingWriter != null) {
             cachingWriter.flush();
         }
+        if (overCap || buffer == null) {
+            throw new IllegalStateException(
+                "capturedBody() called on an over-cap response; gate on isOverCap() and do not cache it.");
+        }
         return buffer.toByteArray();
+    }
+
+    /**
+     * {@code true} once the response exceeded {@code maxResponseBytes} and the
+     * captured copy was abandoned. Such a response must not be cached.
+     */
+    public boolean isOverCap() {
+        return overCap;
     }
 
     public int capturedStatus() {

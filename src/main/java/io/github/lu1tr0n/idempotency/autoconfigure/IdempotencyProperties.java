@@ -156,6 +156,35 @@ public class IdempotencyProperties {
     private DataSize maxBodySize = DataSize.ofMegabytes(1);
 
     /**
+     * Maximum response body the filter will buffer in memory to snapshot into
+     * the store. A keyed request whose handler streams a larger response is
+     * <strong>not cached</strong> (the lock is released, the same key retried
+     * cleanly) — but the client still receives the full response unchanged,
+     * because the cap only bounds the in-memory copy, never the bytes on the
+     * wire. This is the symmetric twin of {@link #getMaxBodySize() max-body-size}
+     * for the response side.
+     *
+     * <p>Unlike the request cap (which can reject with {@code 413} before the
+     * handler runs), an oversized response cannot be rejected — its bytes are
+     * already being streamed to the client when the limit trips — so it is
+     * silently dropped from the cache and logged at {@code WARN}. Be aware this
+     * means a retry <em>re-executes</em> the handler instead of replaying; set
+     * the cap above any response your side-effecting endpoints legitimately
+     * return.
+     *
+     * <p>Default {@code 1MB} (binary). Set to a non-positive value (e.g.
+     * {@code -1}) to disable the response cap and restore unbounded buffering.
+     *
+     * <p>Peak per-request capture memory is up to ~2× this (a growing
+     * {@code ByteArrayOutputStream} doubles its backing array), and a keyed
+     * request holds the request-body copy ({@code max-body-size}) at the same
+     * time, so budget roughly {@code max-body-size + 2 × max-response-size} per
+     * concurrent keyed request. Response <em>headers</em> are not bounded by
+     * this property.
+     */
+    private DataSize maxResponseSize = DataSize.ofMegabytes(1);
+
+    /**
      * HTTP status codes that, when returned by the downstream handler, are
      * <strong>not</strong> persisted as the idempotency record: the lock is
      * released instead of saved, so the very same {@code Idempotency-Key} can be
@@ -224,6 +253,8 @@ public class IdempotencyProperties {
     public void setPrincipalBinding(PrincipalBinding principalBinding) { this.principalBinding = principalBinding; }
     public DataSize getMaxBodySize() { return maxBodySize; }
     public void setMaxBodySize(DataSize maxBodySize) { this.maxBodySize = maxBodySize; }
+    public DataSize getMaxResponseSize() { return maxResponseSize; }
+    public void setMaxResponseSize(DataSize maxResponseSize) { this.maxResponseSize = maxResponseSize; }
     public Set<Integer> getNonCacheableStatuses() { return nonCacheableStatuses; }
     public void setNonCacheableStatuses(Set<Integer> nonCacheableStatuses) { this.nonCacheableStatuses = nonCacheableStatuses; }
 
@@ -253,7 +284,21 @@ public class IdempotencyProperties {
      * a negative {@code readNBytes} argument.
      */
     public int effectiveMaxBodyBytes() {
-        long bytes = maxBodySize == null ? -1L : maxBodySize.toBytes();
+        return clampToInt(maxBodySize);
+    }
+
+    /**
+     * The {@link #getMaxResponseSize() max response size} resolved to an
+     * {@code int} byte ceiling for the capture buffer, or {@code -1} when
+     * unbounded. Same {@code >= Integer.MAX_VALUE → unbounded} clamp as
+     * {@link #effectiveMaxBodyBytes()}.
+     */
+    public int effectiveMaxResponseBytes() {
+        return clampToInt(maxResponseSize);
+    }
+
+    private static int clampToInt(DataSize size) {
+        long bytes = size == null ? -1L : size.toBytes();
         if (bytes <= 0 || bytes >= Integer.MAX_VALUE) {
             return -1;
         }
