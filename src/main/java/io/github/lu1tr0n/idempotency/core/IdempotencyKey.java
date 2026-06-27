@@ -43,19 +43,69 @@ public final class IdempotencyKey {
         if (raw == null) {
             throw new IllegalArgumentException("Idempotency key must not be null");
         }
-        if (raw.isEmpty() || raw.length() > MAX_LENGTH) {
+        // Bound work before the unescape allocation, independent of the servlet
+        // header-size cap (the AOP/resolver path can source a value from
+        // non-header inputs). The longest a valid key can be once unquoted is
+        // MAX_LENGTH, and the longest sf-string that can yield it is every
+        // character escaped plus the two quotes: 2*MAX_LENGTH + 2. Anything
+        // longer cannot be a valid key, so reject it cheaply.
+        if (raw.length() > 2 * MAX_LENGTH + 2) {
             throw new IllegalArgumentException(
                 "Idempotency key must be 1.." + MAX_LENGTH + " characters; got length " + raw.length());
         }
-        for (int i = 0; i < raw.length(); i++) {
-            char c = raw.charAt(i);
+        // The IETF draft (-08+) carries the key as an RFC 8941 Structured Field
+        // sf-string — surrounded by double quotes: `Idempotency-Key: "k-1"`.
+        // Stripe and earlier drafts send the bare token `k-1`. Accept both by
+        // unquoting a well-formed sf-string before validation; a bare value is
+        // passed through untouched, so this stays backwards-compatible.
+        String value = unquoteStructuredField(raw);
+        if (value.isEmpty() || value.length() > MAX_LENGTH) {
+            throw new IllegalArgumentException(
+                "Idempotency key must be 1.." + MAX_LENGTH + " characters; got length " + value.length());
+        }
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
             if (!isAllowedChar(c)) {
                 throw new IllegalArgumentException(
                     "Idempotency key contains illegal character at position " + i
                         + "; only [A-Za-z0-9_:-] are allowed");
             }
         }
-        return new IdempotencyKey(raw);
+        return new IdempotencyKey(value);
+    }
+
+    /**
+     * Strips one RFC 8941 sf-string wrapper if present, unescaping the only two
+     * legal in-string escapes ({@code \"} and {@code \\}). A value that is not a
+     * well-formed quoted string (no surrounding quotes, or a lone quote) is
+     * returned unchanged so bare Stripe-style keys keep working; any leftover
+     * quote then fails the character check below and yields a 400.
+     */
+    private static String unquoteStructuredField(String raw) {
+        if (raw.length() < 2 || raw.charAt(0) != '"' || raw.charAt(raw.length() - 1) != '"') {
+            return raw;
+        }
+        StringBuilder sb = new StringBuilder(raw.length() - 2);
+        for (int i = 1; i < raw.length() - 1; i++) {
+            char c = raw.charAt(i);
+            if (c == '\\') {
+                // A trailing backslash before the closing quote, or one that
+                // escapes anything other than " or \, is not a valid sf-string;
+                // leave it literal so validation rejects it rather than guessing.
+                if (i + 1 >= raw.length() - 1) {
+                    return raw;
+                }
+                char next = raw.charAt(i + 1);
+                if (next != '"' && next != '\\') {
+                    return raw;
+                }
+                sb.append(next);
+                i++;
+            } else {
+                sb.append(c);
+            }
+        }
+        return sb.toString();
     }
 
     private static boolean isAllowedChar(char c) {
