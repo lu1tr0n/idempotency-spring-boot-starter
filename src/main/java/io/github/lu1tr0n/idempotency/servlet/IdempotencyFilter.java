@@ -59,18 +59,18 @@ import java.util.Set;
  *       retries can proceed.</li>
  * </ol>
  *
- * <h2>What we deliberately do not do (yet)</h2>
+ * <h2>Cache-control knobs</h2>
  *
  * <ul>
- *   <li>5xx response handling — currently 5xx responses are cached just like
- *       2xx. A future toggle ({@code spring.idempotency.cache-5xx=false})
- *       will let consumers opt out so that transient downstream failures
- *       don't poison the cache.</li>
- *   <li>Streaming / chunked responses — the captured <em>response</em> body is
- *       buffered in memory, fine for typical JSON API responses but not for
- *       large downloads. A response-size cap is still TODO (the
- *       {@code spring.idempotency.max-body-size} property bounds the
- *       <em>request</em> body only).</li>
+ *   <li>5xx responses are cached by default; set
+ *       {@code spring.idempotency.cache-5xx=false} so transient downstream
+ *       failures don't poison the cache. Arbitrary statuses can be excluded via
+ *       {@code spring.idempotency.non-cacheable-statuses}.</li>
+ *   <li>Both the request and the captured response body are buffered in memory
+ *       (fine for typical JSON APIs, not large downloads). The
+ *       {@code spring.idempotency.max-body-size} and
+ *       {@code spring.idempotency.max-response-size} caps bound that buffering;
+ *       an over-cap response streams to the client in full but is not cached.</li>
  * </ul>
  */
 public class IdempotencyFilter extends OncePerRequestFilter {

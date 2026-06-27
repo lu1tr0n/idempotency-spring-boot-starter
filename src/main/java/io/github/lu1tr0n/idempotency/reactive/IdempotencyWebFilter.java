@@ -169,8 +169,7 @@ public class IdempotencyWebFilter implements WebFilter, Ordered {
         try {
             existing = store.findRecord(key);
         } catch (IdempotencyStore.StoreException ex) {
-            log.warn("WebFlux idempotency store unreachable on findRecord(key={}): {}", key.value(), ex.getMessage());
-            return continueWithCachedBody(exchange, chain, bodyBytes);
+            return handleStoreFailure("findRecord", ex, exchange, chain, bodyBytes);
         }
 
         if (existing.isPresent()) {
@@ -188,8 +187,7 @@ public class IdempotencyWebFilter implements WebFilter, Ordered {
         try {
             lock = store.acquireLock(key, properties.getLockTimeout());
         } catch (IdempotencyStore.StoreException ex) {
-            log.warn("WebFlux idempotency store unreachable on acquireLock(key={}): {}", key.value(), ex.getMessage());
-            return continueWithCachedBody(exchange, chain, bodyBytes);
+            return handleStoreFailure("acquireLock", ex, exchange, chain, bodyBytes);
         }
         if (lock.isEmpty()) {
             ServerHttpResponse response = exchange.getResponse();
@@ -286,6 +284,26 @@ public class IdempotencyWebFilter implements WebFilter, Ordered {
                 return bytes;
             })
             .defaultIfEmpty(new byte[0]);
+    }
+
+    /**
+     * Store-outage handling, mirroring the servlet filter: {@code fail-open}
+     * proceeds without an idempotency guarantee, {@code fail-closed} (the
+     * default) refuses the request with 503 rather than risk a duplicate
+     * operation. Reactive parity for {@code spring.idempotency.failure-strategy}.
+     */
+    private Mono<Void> handleStoreFailure(String operation, IdempotencyStore.StoreException ex,
+                                          ServerWebExchange exchange, WebFilterChain chain, byte[] bodyBytes) {
+        if (properties.getFailureStrategy() == IdempotencyProperties.FailureStrategy.FAIL_OPEN) {
+            log.warn("WebFlux idempotency store unreachable during {}; falling back to fail-open "
+                + "(no idempotency guarantee): {}", operation, ex.getMessage());
+            return continueWithCachedBody(exchange, chain, bodyBytes);
+        }
+        log.error("WebFlux idempotency store unreachable during {}; refusing the request (fail-closed): {}",
+            operation, ex.getMessage());
+        return writeJsonError(exchange.getResponse(), HttpStatus.SERVICE_UNAVAILABLE,
+            "IDEMPOTENCY_STORE_UNAVAILABLE",
+            "Idempotency storage is currently unavailable; please retry shortly.");
     }
 
     private Mono<Void> continueWithCachedBody(ServerWebExchange exchange, WebFilterChain chain, byte[] bodyBytes) {

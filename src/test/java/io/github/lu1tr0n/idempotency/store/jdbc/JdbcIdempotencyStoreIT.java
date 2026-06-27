@@ -191,6 +191,24 @@ class JdbcIdempotencyStoreIT {
     }
 
     @Test
+    void releaseLock_freesKeyForReacquireWithoutCaching() {
+        // The production retry path for non-cacheable statuses and over-cap
+        // responses: the filter calls releaseLock instead of save, and the same
+        // key must then be lockable again with nothing replayable. Previously
+        // only covered on the in-memory store.
+        IdempotencyKey key = IdempotencyKey.of("release-001");
+        IdempotencyStore.LockToken token = store.acquireLock(key, Duration.ofSeconds(30)).orElseThrow();
+        // While the lock is held, a second acquire fails.
+        assertThat(store.acquireLock(key, Duration.ofSeconds(30))).isEmpty();
+
+        store.releaseLock(key, token);
+
+        // Nothing was cached, and the key is free to lock again.
+        assertThat(store.findRecord(key)).isEmpty();
+        assertThat(store.acquireLock(key, Duration.ofSeconds(30))).isPresent();
+    }
+
+    @Test
     void findRecord_returnsEmptyForExpiredRecord() throws InterruptedException {
         IdempotencyKey key = IdempotencyKey.of("expired-record-001");
         IdempotencyStore.LockToken token = store.acquireLock(key, Duration.ofSeconds(30)).orElseThrow();
