@@ -2,6 +2,7 @@ package io.github.lu1tr0n.idempotency.autoconfigure;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.DeprecatedConfigurationProperty;
+import org.springframework.util.unit.DataSize;
 
 import java.time.Duration;
 import java.util.LinkedHashSet;
@@ -129,6 +130,31 @@ public class IdempotencyProperties {
      */
     private PrincipalBinding principalBinding = PrincipalBinding.AUTO;
 
+    /**
+     * Maximum request-body size the filter will buffer in memory to compute the
+     * idempotency payload fingerprint. A keyed request whose body exceeds this
+     * is rejected with {@code 413 Payload Too Large} before any store work — the
+     * body cannot be hashed, so the idempotency guarantee the client asked for
+     * (by sending the key) cannot be honoured.
+     *
+     * <p>Only <strong>keyed</strong> requests are buffered, so this never
+     * affects large unkeyed uploads (those are governed by your container /
+     * codec limits, which this property does not touch). The check bounds the
+     * actual bytes read, so it holds for chunked bodies and spoofed
+     * {@code Content-Length} alike.
+     *
+     * <p>Default {@code 1MB} (binary, = 1 MiB). Set to a non-positive value
+     * (e.g. {@code -1}) to disable the cap and restore unbounded buffering.
+     * Peak buffer memory is roughly {@code max-body-size × concurrent keyed
+     * requests}, so lower it on high-thread deployments and raise it
+     * deliberately for large-JSON APIs.
+     *
+     * <p>This is independent of {@code failure-strategy}: that governs store
+     * outages (where fail-open may proceed untracked); an over-cap body is a
+     * deterministic client error and is always rejected.
+     */
+    private DataSize maxBodySize = DataSize.ofMegabytes(1);
+
     // === Getters / setters ===
 
     public boolean isEnabled() { return enabled; }
@@ -165,6 +191,27 @@ public class IdempotencyProperties {
     public void setCache5xx(boolean cache5xx) { this.cache5xx = cache5xx; }
     public PrincipalBinding getPrincipalBinding() { return principalBinding; }
     public void setPrincipalBinding(PrincipalBinding principalBinding) { this.principalBinding = principalBinding; }
+    public DataSize getMaxBodySize() { return maxBodySize; }
+    public void setMaxBodySize(DataSize maxBodySize) { this.maxBodySize = maxBodySize; }
+
+    /**
+     * The {@link #getMaxBodySize() max body size} resolved to an {@code int}
+     * byte count for the buffering paths, or {@code -1} when buffering is
+     * unbounded. A configured size at or above {@link Integer#MAX_VALUE} is
+     * treated as unbounded: a single {@code byte[]} cannot hold ~2 GiB, so the
+     * cap would be unenforceable anyway.
+     *
+     * <p>This {@code < Integer.MAX_VALUE} guarantee is what lets the servlet
+     * wrapper read {@code maxBytes + 1} without risking an integer overflow to
+     * a negative {@code readNBytes} argument.
+     */
+    public int effectiveMaxBodyBytes() {
+        long bytes = maxBodySize == null ? -1L : maxBodySize.toBytes();
+        if (bytes <= 0 || bytes >= Integer.MAX_VALUE) {
+            return -1;
+        }
+        return (int) bytes;
+    }
 
     public enum Backend { AUTO, JDBC, REDIS, IN_MEMORY }
     public enum FailureStrategy { FAIL_OPEN, FAIL_CLOSED }

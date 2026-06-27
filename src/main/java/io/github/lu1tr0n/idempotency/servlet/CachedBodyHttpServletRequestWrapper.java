@@ -1,5 +1,7 @@
 package io.github.lu1tr0n.idempotency.servlet;
 
+import io.github.lu1tr0n.idempotency.exception.IdempotencyPayloadTooLargeException;
+
 import jakarta.servlet.ReadListener;
 import jakarta.servlet.ServletInputStream;
 import jakarta.servlet.http.HttpServletRequest;
@@ -26,20 +28,48 @@ import java.nio.charset.StandardCharsets;
  *
  * <p>The cost of this wrapper is one extra copy of the request body in memory.
  * Acceptable for typical JSON APIs (request bodies under a few KB); not
- * appropriate for large file uploads, which the filter excludes anyway via
- * the {@code spring.idempotency.methods} default of POST/PUT/PATCH and a
- * future content-length cap.
+ * appropriate for large file uploads. The {@code maxBytes} ceiling bounds the
+ * snapshot so a hostile (huge / chunked / Content-Length-spoofed) body cannot
+ * exhaust the heap.
  */
 public class CachedBodyHttpServletRequestWrapper extends HttpServletRequestWrapper {
 
     private final byte[] cachedBody;
 
+    /**
+     * Snapshot the body with no size limit — equivalent to {@code this(request, -1)}.
+     */
     public CachedBodyHttpServletRequestWrapper(HttpServletRequest request) throws IOException {
+        this(request, -1);
+    }
+
+    /**
+     * Snapshot the body, rejecting it once it exceeds {@code maxBytes}.
+     *
+     * @param maxBytes the inclusive byte ceiling; {@code <= 0} means unbounded.
+     * @throws IdempotencyPayloadTooLargeException if the body exceeds {@code maxBytes}
+     */
+    public CachedBodyHttpServletRequestWrapper(HttpServletRequest request, int maxBytes) throws IOException {
         super(request);
         // Use the request's input stream once to snapshot the body, then
         // discard the stream — every subsequent getInputStream call returns a
         // fresh wrapper around the cached array.
-        this.cachedBody = request.getInputStream().readAllBytes();
+        if (maxBytes <= 0) {
+            this.cachedBody = request.getInputStream().readAllBytes();
+            return;
+        }
+        // Read at most maxBytes+1: the buffer can never exceed the ceiling by
+        // more than one byte regardless of the declared Content-Length or
+        // chunked encoding, and that one extra byte is exactly what tells us the
+        // body was over the limit. This bounds actual bytes read, not a header.
+        // maxBytes+1 cannot overflow: effectiveMaxBodyBytes() caps it below
+        // Integer.MAX_VALUE.
+        byte[] snapshot = request.getInputStream().readNBytes(maxBytes + 1);
+        if (snapshot.length > maxBytes) {
+            throw new IdempotencyPayloadTooLargeException(
+                "Request body exceeds the configured idempotency limit of " + maxBytes + " bytes.");
+        }
+        this.cachedBody = snapshot;
     }
 
     public byte[] cachedBody() {

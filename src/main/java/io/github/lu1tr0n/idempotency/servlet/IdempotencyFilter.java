@@ -64,9 +64,11 @@ import java.util.Set;
  *       2xx. A future toggle ({@code spring.idempotency.cache-5xx=false})
  *       will let consumers opt out so that transient downstream failures
  *       don't poison the cache.</li>
- *   <li>Streaming / chunked responses — the captured body is buffered in
- *       memory, fine for typical JSON API responses but not for large
- *       downloads. The auto-config sets a 1 MiB safety limit (TODO).</li>
+ *   <li>Streaming / chunked responses — the captured <em>response</em> body is
+ *       buffered in memory, fine for typical JSON API responses but not for
+ *       large downloads. A response-size cap is still TODO (the
+ *       {@code spring.idempotency.max-body-size} property bounds the
+ *       <em>request</em> body only).</li>
  * </ul>
  */
 public class IdempotencyFilter extends OncePerRequestFilter {
@@ -78,6 +80,7 @@ public class IdempotencyFilter extends OncePerRequestFilter {
     private final IdempotencyKeyResolver keyResolver;
     private final IdempotencyProperties properties;
     private final Set<String> trackedMethods;
+    private final int maxBodyBytes;
 
     public IdempotencyFilter(IdempotencyStore store,
                              IdempotencyKeyResolver keyResolver,
@@ -89,6 +92,8 @@ public class IdempotencyFilter extends OncePerRequestFilter {
         this.trackedMethods = Set.copyOf(properties.getMethods().stream()
             .map(m -> m.toUpperCase(Locale.ROOT))
             .toList());
+        // Resolve the body ceiling once (-1 = unbounded).
+        this.maxBodyBytes = properties.effectiveMaxBodyBytes();
     }
 
     @Override
@@ -148,9 +153,21 @@ public class IdempotencyFilter extends OncePerRequestFilter {
         // bytes as the consumer reads, so reading the body for hashing would
         // leave the chain with an empty stream. Our wrapper snapshots the
         // body up-front and serves a fresh stream on every getInputStream().
-        CachedBodyHttpServletRequestWrapper cachedRequest = (request instanceof CachedBodyHttpServletRequestWrapper c)
-            ? c
-            : new CachedBodyHttpServletRequestWrapper(request);
+        CachedBodyHttpServletRequestWrapper cachedRequest;
+        try {
+            // A request that already carries our wrapper was snapshotted (and so
+            // already capped) on the pass that installed it — reuse it as-is.
+            cachedRequest = (request instanceof CachedBodyHttpServletRequestWrapper c)
+                ? c
+                : new CachedBodyHttpServletRequestWrapper(request, maxBodyBytes);
+        } catch (io.github.lu1tr0n.idempotency.exception.IdempotencyPayloadTooLargeException tooLarge) {
+            // Over the cap: we cannot hash the body, so we cannot honour the
+            // idempotency guarantee the client opted into by sending the key.
+            // Reject before any store work — no record, no lock. This is a
+            // client error, independent of the fail-open/closed store strategy.
+            writeJsonError(response, 413, "IDEMPOTENCY_PAYLOAD_TOO_LARGE", tooLarge.getMessage());
+            return;
+        }
 
         byte[] bodyBytes = cachedRequest.cachedBody();
         String payloadHash = PayloadHasher.hash(request.getMethod(), request.getRequestURI(), bodyBytes);

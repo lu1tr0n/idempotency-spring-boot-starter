@@ -16,6 +16,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.Ordered;
 import org.springframework.core.io.buffer.DataBuffer;
+import org.springframework.core.io.buffer.DataBufferLimitException;
 import org.springframework.core.io.buffer.DataBufferUtils;
 import org.springframework.core.io.buffer.DefaultDataBufferFactory;
 import org.springframework.http.HttpHeaders;
@@ -34,7 +35,6 @@ import reactor.core.publisher.Mono;
 
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
-import java.time.Duration;
 import java.time.Instant;
 import java.util.Locale;
 import java.util.Optional;
@@ -74,6 +74,7 @@ public class IdempotencyWebFilter implements WebFilter, Ordered {
     private final IdempotencyProperties properties;
     private final Set<String> trackedMethods;
     private final ReactiveIdempotencyPrincipalResolver principalResolver;
+    private final int maxBodyBytes;
 
     public IdempotencyWebFilter(IdempotencyStore store, IdempotencyProperties properties) {
         this(store, properties, null);
@@ -87,6 +88,7 @@ public class IdempotencyWebFilter implements WebFilter, Ordered {
         this.trackedMethods = Set.copyOf(properties.getMethods().stream()
             .map(m -> m.toUpperCase(Locale.ROOT))
             .toList());
+        this.maxBodyBytes = properties.effectiveMaxBodyBytes();
     }
 
     private boolean principalBindingActive() {
@@ -122,7 +124,15 @@ public class IdempotencyWebFilter implements WebFilter, Ordered {
                     "IDEMPOTENCY_PRINCIPAL_REQUIRED", ex.getMessage()))
             .onErrorResume(IdempotencyKeyTooLongException.class,
                 ex -> writeJsonError(exchange.getResponse(), HttpStatus.BAD_REQUEST,
-                    "INVALID_IDEMPOTENCY_KEY", ex.getMessage()));
+                    "INVALID_IDEMPOTENCY_KEY", ex.getMessage()))
+            // Body exceeded the cap while materialising for the fingerprint.
+            // The limited join() already released the buffers it accumulated;
+            // reject with 413 — never fall through to the fail-open untracked
+            // path, which would defeat the cap.
+            .onErrorResume(DataBufferLimitException.class,
+                ex -> writeJsonError(exchange.getResponse(), HttpStatus.PAYLOAD_TOO_LARGE,
+                    "IDEMPOTENCY_PAYLOAD_TOO_LARGE",
+                    "Request body exceeds the configured idempotency limit of " + maxBodyBytes + " bytes."));
     }
 
     /**
@@ -253,7 +263,13 @@ public class IdempotencyWebFilter implements WebFilter, Ordered {
     }
 
     private Mono<byte[]> materialiseBody(ServerHttpRequest request) {
-        return DataBufferUtils.join(request.getBody())
+        // The limited join emits DataBufferLimitException (and releases the
+        // buffers it accumulated) once the body passes maxBodyBytes. With the
+        // cap disabled (-1) fall back to the unbounded join.
+        Mono<DataBuffer> joined = maxBodyBytes > 0
+            ? DataBufferUtils.join(request.getBody(), maxBodyBytes)
+            : DataBufferUtils.join(request.getBody());
+        return joined
             .map(buffer -> {
                 byte[] bytes = new byte[buffer.readableByteCount()];
                 buffer.read(bytes);
@@ -352,7 +368,4 @@ public class IdempotencyWebFilter implements WebFilter, Ordered {
             return ct == null ? null : ct.toString();
         }
     }
-
-    @SuppressWarnings("unused") // placeholder for backward-compat with callers
-    private Duration unused() { return Duration.ZERO; }
 }
