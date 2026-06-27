@@ -27,11 +27,15 @@ import java.util.UUID;
  * <h2>Locking model</h2>
  *
  * <p>The table doubles as the lock table — there is no separate lock table to
- * keep in sync. A row whose {@code locked_until} is in the future and whose
- * {@code response_body} is empty represents an in-flight request that holds
- * the lock. A row whose {@code response_body} is populated and whose
- * {@code expires_at} is in the future represents a completed request that
- * can be replayed.
+ * keep in sync. The completion discriminator is {@code lock_token}: a row with
+ * a non-null {@code lock_token} (and {@code locked_until} in the future)
+ * represents an in-flight request that holds the lock; {@code save()} clears
+ * {@code lock_token} to {@code NULL} once the response is persisted, so a row
+ * with {@code lock_token IS NULL} and {@code expires_at} in the future is a
+ * completed request that can be replayed. The response body is <em>not</em> a
+ * reliable discriminator — the column is {@code NOT NULL}, lock rows carry an
+ * empty (non-null) body, and a legitimate 204/304 record also has an empty
+ * body.
  *
  * <p>Lock acquisition uses an {@code INSERT ... ON CONFLICT DO UPDATE} trick
  * that atomically takes the lock only if (a) no row exists yet, or (b) the
@@ -87,7 +91,14 @@ public class JdbcIdempotencyStore implements IdempotencyStore {
                 "SELECT idempotency_key, payload_hash, http_status, response_headers,"
                     + " response_body, response_content_type, created_at, expires_at"
                     + " FROM " + tableName
-                    + " WHERE idempotency_key = ? AND expires_at > ? AND response_body IS NOT NULL",
+                    // `lock_token IS NULL` is the completion discriminator: save()
+                    // clears the token, while an in-flight or stolen lock keeps it
+                    // set. `response_body IS NOT NULL` cannot be used here — the
+                    // column is NOT NULL and lock rows carry an empty (non-null)
+                    // body, so that predicate is a tautology that would leak
+                    // in-flight lock rows to a concurrent caller (and a 204/304
+                    // record legitimately has an empty body too).
+                    + " WHERE idempotency_key = ? AND expires_at > ? AND lock_token IS NULL",
                 ps -> {
                     ps.setString(1, key.value());
                     ps.setTimestamp(2, Timestamp.from(Instant.now()));
@@ -113,15 +124,13 @@ public class JdbcIdempotencyStore implements IdempotencyStore {
                     + " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 ps -> {
                     ps.setString(1, key.value());
-                    // http_status / response_body are NOT NULL in the schema;
-                    // placeholders here mean "lock-only row, no response yet".
-                    // We use 0 / empty bytes for the placeholders and rely on
-                    // findRecord's `response_body IS NOT NULL` filter being the
-                    // post-completion guard. We then mark NULL-equivalent state
-                    // by setting response_body to empty and reading response_body
-                    // length in the dedicated isCompleted helper — but since
-                    // the schema requires NOT NULL we keep it simple: 0 + empty
-                    // bytes means in-flight, populated means complete.
+                    // http_status / response_body are NOT NULL in the schema, so
+                    // a lock-only row still has to put *something* there: 0 for
+                    // the status and empty bytes for the body. These are NOT the
+                    // completion signal — findRecord discriminates on
+                    // `lock_token IS NULL` (cleared by save()), not on the body,
+                    // precisely because an empty body is ambiguous (lock row vs a
+                    // real 204/304 response).
                     ps.setInt(2, 0);
                     ps.setString(3, "{}");
                     ps.setBytes(4, new byte[0]);

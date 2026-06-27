@@ -17,6 +17,7 @@ import javax.sql.DataSource;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -111,6 +112,21 @@ class JdbcIdempotencyStoreIT {
     }
 
     @Test
+    void findRecord_returnsEmptyWhileLockHeldInFlight() {
+        // Contract: findRecord must return empty when only a lock (no response
+        // yet) exists. Regression for the JDBC store leaking in-flight lock
+        // rows: the table doubles as the lock table, and lock rows carry an
+        // empty (non-null) body with a future expires_at — so the completion
+        // guard must be `lock_token IS NULL`, not `response_body IS NOT NULL`.
+        IdempotencyKey key = IdempotencyKey.of("in-flight-001");
+        Optional<IdempotencyStore.LockToken> lock = store.acquireLock(key, Duration.ofSeconds(30));
+        assertThat(lock).isPresent();
+
+        // A concurrent second caller looks up the record while the lock is held.
+        assertThat(store.findRecord(key)).isEmpty();
+    }
+
+    @Test
     void acquireLock_secondCallerSeesEmptyOptional() {
         IdempotencyKey key = IdempotencyKey.of("lock-contention-001");
         Optional<IdempotencyStore.LockToken> first = store.acquireLock(key, Duration.ofSeconds(30));
@@ -121,17 +137,30 @@ class JdbcIdempotencyStoreIT {
     }
 
     @Test
-    void acquireLock_canStealExpiredLock() throws InterruptedException {
+    void acquireLock_canStealExpiredLock() {
         IdempotencyKey key = IdempotencyKey.of("expired-lock-001");
-        // Lock with a 1-second TTL, then wait it out.
-        Optional<IdempotencyStore.LockToken> first = store.acquireLock(key, Duration.ofSeconds(1));
-        assertThat(first).isPresent();
-        Thread.sleep(1500);
+        // Seed a "crashed in-flight lock" directly: an empty-body row whose
+        // locked_until is already in the past. Seeding via SQL (instead of
+        // acquireLock + Thread.sleep) keeps the test deterministic — it
+        // asserts the steal precondition exactly, with no dependency on
+        // wall-clock timing under load. The production steal path
+        // (locked_until < now) is exercised identically; only how the row's
+        // locked_until reached the past differs.
+        Instant past = Instant.now().minus(Duration.ofMinutes(5));
+        jdbc.update(
+            "INSERT INTO idempotency_records (idempotency_key, http_status, response_headers,"
+                + " response_body, created_at, expires_at, lock_token, locked_until)"
+                + " VALUES (?, 0, '{}', ?, ?, ?, ?, ?)",
+            key.value(), new byte[0], Timestamp.from(past), Timestamp.from(past),
+            "stale-token-from-crashed-server", Timestamp.from(past));
 
-        Optional<IdempotencyStore.LockToken> second = store.acquireLock(key, Duration.ofSeconds(30));
-        assertThat(second).isPresent();
-        // Tokens differ — second caller got a fresh lock.
-        assertThat(second.get()).isNotEqualTo(first.get());
+        Optional<IdempotencyStore.LockToken> stolen = store.acquireLock(key, Duration.ofSeconds(30));
+
+        assertThat(stolen).isPresent();
+        // The stealer owns a fresh token, not the crashed server's stale one.
+        assertThat(stolen.get().toString()).doesNotContain("stale-token-from-crashed-server");
+        // And no stale response is replayable after the steal.
+        assertThat(store.findRecord(key)).isEmpty();
     }
 
     @Test
