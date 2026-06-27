@@ -35,7 +35,13 @@ import static org.assertj.core.api.Assertions.assertThat;
         "spring.idempotency.enabled=true",
         "spring.idempotency.ttl=1h",
         "spring.idempotency.lock-timeout=5s",
-        "spring.main.web-application-type=reactive"
+        "spring.main.web-application-type=reactive",
+        // spring-security is on the test classpath for the principal-binding
+        // tests; exclude its reactive auto-config here so this test keeps
+        // running against unsecured endpoints (anonymous → bare key, unchanged).
+        "spring.autoconfigure.exclude="
+            + "org.springframework.boot.autoconfigure.security.reactive.ReactiveSecurityAutoConfiguration,"
+            + "org.springframework.boot.autoconfigure.security.reactive.ReactiveUserDetailsServiceAutoConfiguration"
     }
 )
 class WebFluxFilterIntegrationTest {

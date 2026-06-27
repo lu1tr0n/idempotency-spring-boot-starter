@@ -1,10 +1,15 @@
 package io.github.lu1tr0n.idempotency.reactive;
 
 import io.github.lu1tr0n.idempotency.autoconfigure.IdempotencyProperties;
+import io.github.lu1tr0n.idempotency.autoconfigure.IdempotencyProperties.PrincipalBinding;
 import io.github.lu1tr0n.idempotency.core.IdempotencyKey;
 import io.github.lu1tr0n.idempotency.core.IdempotencyRecord;
 import io.github.lu1tr0n.idempotency.core.IdempotencyStore;
 import io.github.lu1tr0n.idempotency.core.PayloadHasher;
+import io.github.lu1tr0n.idempotency.exception.IdempotencyKeyTooLongException;
+import io.github.lu1tr0n.idempotency.exception.IdempotencyPrincipalRequiredException;
+import io.github.lu1tr0n.idempotency.principal.PrincipalKeyComposer;
+import io.github.lu1tr0n.idempotency.principal.ReactiveIdempotencyPrincipalResolver;
 
 import org.reactivestreams.Publisher;
 import org.slf4j.Logger;
@@ -54,16 +59,38 @@ public class IdempotencyWebFilter implements WebFilter, Ordered {
     private static final Logger log = LoggerFactory.getLogger(IdempotencyWebFilter.class);
     private static final String REPLAYED_HEADER = "Idempotency-Replayed";
 
+    /**
+     * Spring Security's {@code WebFilterChainProxy} runs at
+     * {@code SecurityProperties.DEFAULT_FILTER_ORDER} (-100) and populates the
+     * reactive {@code SecurityContext}. When principal binding is active this
+     * filter must run after it, so the principal is available when we scope the
+     * key. When binding is off we keep running early so replays short-circuit
+     * before any downstream work.
+     */
+    private static final int AFTER_SECURITY_ORDER = -99;
+    private static final int BEFORE_SECURITY_ORDER = Ordered.HIGHEST_PRECEDENCE + 100;
+
     private final IdempotencyStore store;
     private final IdempotencyProperties properties;
     private final Set<String> trackedMethods;
+    private final ReactiveIdempotencyPrincipalResolver principalResolver;
 
     public IdempotencyWebFilter(IdempotencyStore store, IdempotencyProperties properties) {
+        this(store, properties, null);
+    }
+
+    public IdempotencyWebFilter(IdempotencyStore store, IdempotencyProperties properties,
+                                ReactiveIdempotencyPrincipalResolver principalResolver) {
         this.store = store;
         this.properties = properties;
+        this.principalResolver = principalResolver;
         this.trackedMethods = Set.copyOf(properties.getMethods().stream()
             .map(m -> m.toUpperCase(Locale.ROOT))
             .toList());
+    }
+
+    private boolean principalBindingActive() {
+        return principalResolver != null && properties.getPrincipalBinding() != PrincipalBinding.DISABLED;
     }
 
     @Override
@@ -87,8 +114,37 @@ public class IdempotencyWebFilter implements WebFilter, Ordered {
                 "INVALID_IDEMPOTENCY_KEY", ex.getMessage());
         }
 
-        return materialiseBody(request)
-            .flatMap(bodyBytes -> applyIdempotency(exchange, chain, key, bodyBytes));
+        return scopeKey(key)
+            .flatMap(scopedKey -> materialiseBody(request)
+                .flatMap(bodyBytes -> applyIdempotency(exchange, chain, scopedKey, bodyBytes)))
+            .onErrorResume(IdempotencyPrincipalRequiredException.class,
+                ex -> writeJsonError(exchange.getResponse(), HttpStatus.UNPROCESSABLE_ENTITY,
+                    "IDEMPOTENCY_PRINCIPAL_REQUIRED", ex.getMessage()))
+            .onErrorResume(IdempotencyKeyTooLongException.class,
+                ex -> writeJsonError(exchange.getResponse(), HttpStatus.BAD_REQUEST,
+                    "INVALID_IDEMPOTENCY_KEY", ex.getMessage()));
+    }
+
+    /**
+     * Folds the authenticated principal into the key (IETF §5) without blocking.
+     * When binding is off or no resolver is wired, returns the bare key — the
+     * stored key is then byte-for-byte what it was before this feature. An
+     * anonymous request yields the bare key in {@code auto} and a
+     * {@link IdempotencyPrincipalRequiredException} in {@code required}.
+     */
+    private Mono<IdempotencyKey> scopeKey(IdempotencyKey rawKey) {
+        if (!principalBindingActive()) {
+            return Mono.just(rawKey);
+        }
+        boolean required = properties.getPrincipalBinding() == PrincipalBinding.REQUIRED;
+        return principalResolver.resolvePrincipal()
+            .map(principal -> PrincipalKeyComposer.compose(principal, rawKey))
+            .switchIfEmpty(Mono.defer(() -> required
+                ? Mono.error(new IdempotencyPrincipalRequiredException(
+                    "principal-binding=required but the request supplied an Idempotency-Key "
+                        + "without an authenticated principal to scope it to."))
+                // auto + anonymous → anonymous namespace, disjoint from scoped.
+                : Mono.just(PrincipalKeyComposer.anonymous(rawKey))));
     }
 
     private Mono<Void> applyIdempotency(ServerWebExchange exchange, WebFilterChain chain,
@@ -228,9 +284,10 @@ public class IdempotencyWebFilter implements WebFilter, Ordered {
 
     @Override
     public int getOrder() {
-        // Run early — before security filters that may short-circuit so
-        // replays don't waste downstream work.
-        return Ordered.HIGHEST_PRECEDENCE + 100;
+        // With principal binding active we must run AFTER Spring Security so the
+        // reactive SecurityContext is populated; otherwise run early so replays
+        // short-circuit before any downstream work.
+        return principalBindingActive() ? AFTER_SECURITY_ORDER : BEFORE_SECURITY_ORDER;
     }
 
     // === Request decorator: replays the body materialised once. ===

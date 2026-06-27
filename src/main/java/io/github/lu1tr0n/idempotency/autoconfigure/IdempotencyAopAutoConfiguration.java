@@ -3,10 +3,12 @@ package io.github.lu1tr0n.idempotency.autoconfigure;
 import io.github.lu1tr0n.idempotency.aop.IdempotentAspect;
 import io.github.lu1tr0n.idempotency.aop.IdempotentKeyResolver;
 import io.github.lu1tr0n.idempotency.core.IdempotencyStore;
+import io.github.lu1tr0n.idempotency.principal.IdempotencyPrincipalResolver;
 
 import org.aspectj.lang.annotation.Aspect;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
@@ -58,10 +60,16 @@ public class IdempotencyAopAutoConfiguration {
     @ConditionalOnMissingBean
     public IdempotentAspect idempotentAspect(IdempotencyStore store,
                                              IdempotencyProperties properties,
-                                             IdempotentKeyResolver keyResolver) {
-        log.info("@Idempotent aspect enabled (header resolver: {})",
-            keyResolver == IdempotentKeyResolver.NO_OP ? "none" : "servlet");
-        return new IdempotentAspect(store, properties, keyResolver);
+                                             IdempotentKeyResolver keyResolver,
+                                             ObjectProvider<IdempotencyPrincipalResolver> principalProvider) {
+        IdempotencyPrincipalResolver principalResolver =
+            properties.getPrincipalBinding() == IdempotencyProperties.PrincipalBinding.DISABLED
+                ? null
+                : principalProvider.getIfAvailable();
+        log.info("@Idempotent aspect enabled (header resolver: {}, principal binding: {})",
+            keyResolver == IdempotentKeyResolver.NO_OP ? "none" : "servlet",
+            principalResolver == null ? "off" : properties.getPrincipalBinding());
+        return new IdempotentAspect(store, properties, keyResolver, principalResolver);
     }
 
     /**

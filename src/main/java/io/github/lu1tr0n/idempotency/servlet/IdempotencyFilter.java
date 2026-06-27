@@ -136,6 +136,12 @@ public class IdempotencyFilter extends OncePerRequestFilter {
         } catch (IllegalArgumentException malformedKey) {
             writeJsonError(response, HttpServletResponse.SC_BAD_REQUEST, "INVALID_IDEMPOTENCY_KEY", malformedKey.getMessage());
             return;
+        } catch (io.github.lu1tr0n.idempotency.exception.IdempotencyPrincipalRequiredException principalRequired) {
+            // principal-binding=required, key present but no authenticated
+            // principal to scope it to: the key is well-formed but the policy
+            // can't be satisfied — 422, mirroring the payload-mismatch idiom.
+            writeJsonError(response, 422, "IDEMPOTENCY_PRINCIPAL_REQUIRED", principalRequired.getMessage());
+            return;
         }
 
         // Wrap request so the body can be read twice (hash now, controller later).

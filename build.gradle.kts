@@ -71,6 +71,13 @@ dependencies {
     // present. Lettuce is the default Spring Boot Redis client.
     compileOnly("org.springframework.boot:spring-boot-starter-data-redis")
 
+    // Principal binding — optional, activated when Spring Security is on the
+    // consumer's classpath. compileOnly so apps that don't bind the key to a
+    // principal (or supply their own IdempotencyPrincipalResolver) don't drag
+    // in Spring Security. spring-security-core carries both SecurityContextHolder
+    // (servlet) and ReactiveSecurityContextHolder (WebFlux).
+    compileOnly("org.springframework.security:spring-security-core")
+
     // Generates additional-spring-configuration-metadata.json so IDEs
     // (IntelliJ, VS Code) can autocomplete our properties in application.yml.
     annotationProcessor("org.springframework.boot:spring-boot-configuration-processor")
@@ -82,6 +89,8 @@ dependencies {
     testImplementation("org.springframework.boot:spring-boot-starter-web")
     testImplementation("org.springframework.boot:spring-boot-starter-webflux")
     testImplementation("org.springframework.boot:spring-boot-starter-aop")
+    testImplementation("org.springframework.boot:spring-boot-starter-security") // principal-binding tests (servlet + webflux)
+    testImplementation("org.springframework.security:spring-security-test")     // mockUser / SecurityMockServerConfigurers
     testImplementation("org.springframework.boot:spring-boot-starter-data-redis")
     testImplementation("org.springframework.boot:spring-boot-starter-jdbc")
     testImplementation("com.h2database:h2") // in-memory JDBC for unit IT

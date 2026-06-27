@@ -46,7 +46,15 @@ import static org.assertj.core.api.Assertions.assertThat;
         // aspect is the only thing that can dedup.
         "spring.idempotency.methods=DELETE",
         "spring.idempotency.ttl=1h",
-        "spring.idempotency.lock-timeout=5s"
+        "spring.idempotency.lock-timeout=5s",
+        // spring-security is on the test classpath for the principal-binding
+        // tests; exclude its auto-config here so these pre-existing tests keep
+        // running against unsecured endpoints (anonymous → bare key, unchanged).
+        "spring.autoconfigure.exclude="
+            + "org.springframework.boot.autoconfigure.security.servlet.SecurityAutoConfiguration,"
+            + "org.springframework.boot.autoconfigure.security.servlet.UserDetailsServiceAutoConfiguration,"
+            + "org.springframework.boot.autoconfigure.security.reactive.ReactiveSecurityAutoConfiguration,"
+            + "org.springframework.boot.autoconfigure.security.reactive.ReactiveUserDetailsServiceAutoConfiguration"
     }
 )
 class IdempotentAnnotationIntegrationTest {

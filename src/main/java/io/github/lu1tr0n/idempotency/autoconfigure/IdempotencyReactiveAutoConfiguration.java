@@ -1,8 +1,11 @@
 package io.github.lu1tr0n.idempotency.autoconfigure;
 
 import io.github.lu1tr0n.idempotency.core.IdempotencyStore;
+import io.github.lu1tr0n.idempotency.principal.ReactiveIdempotencyPrincipalResolver;
 import io.github.lu1tr0n.idempotency.reactive.IdempotencyWebFilter;
 
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
@@ -32,7 +35,25 @@ public class IdempotencyReactiveAutoConfiguration {
     @Bean
     @ConditionalOnBean(IdempotencyStore.class)
     @ConditionalOnMissingBean
-    public IdempotencyWebFilter idempotencyWebFilter(IdempotencyStore store, IdempotencyProperties properties) {
-        return new IdempotencyWebFilter(store, properties);
+    public IdempotencyWebFilter idempotencyWebFilter(
+            IdempotencyStore store,
+            IdempotencyProperties properties,
+            ObjectProvider<ReactiveIdempotencyPrincipalResolver> principalProvider) {
+        ReactiveIdempotencyPrincipalResolver principalResolver = principalProvider.getIfAvailable();
+        if (principalResolver == null
+            && properties.getPrincipalBinding() == IdempotencyProperties.PrincipalBinding.REQUIRED) {
+            throw new IllegalStateException(
+                "spring.idempotency.principal-binding=required but no ReactiveIdempotencyPrincipalResolver "
+                    + "bean is available. Put Spring Security on the classpath or define your own "
+                    + "ReactiveIdempotencyPrincipalResolver bean.");
+        }
+        if (principalResolver == null
+            && properties.getPrincipalBinding() == IdempotencyProperties.PrincipalBinding.AUTO) {
+            LoggerFactory.getLogger(IdempotencyReactiveAutoConfiguration.class).warn(
+                "spring.idempotency.principal-binding=auto but no ReactiveIdempotencyPrincipalResolver bean "
+                    + "is available; idempotency keys are NOT scoped to the principal. Put Spring Security on "
+                    + "the classpath or define your own ReactiveIdempotencyPrincipalResolver bean.");
+        }
+        return new IdempotencyWebFilter(store, properties, principalResolver);
     }
 }

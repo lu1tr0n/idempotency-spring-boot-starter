@@ -44,7 +44,13 @@ import static org.assertj.core.api.Assertions.assertThat;
     properties = {
         "spring.idempotency.enabled=true",
         "spring.idempotency.ttl=1h",
-        "spring.idempotency.lock-timeout=5s"
+        "spring.idempotency.lock-timeout=5s",
+        // spring-security is on the test classpath for the principal-binding
+        // tests; exclude its auto-config here so this test keeps running against
+        // unsecured endpoints (anonymous → bare key, behaviour unchanged).
+        "spring.autoconfigure.exclude="
+            + "org.springframework.boot.autoconfigure.security.servlet.SecurityAutoConfiguration,"
+            + "org.springframework.boot.autoconfigure.security.servlet.UserDetailsServiceAutoConfiguration"
     }
 )
 class InMemoryFilterIntegrationTest {

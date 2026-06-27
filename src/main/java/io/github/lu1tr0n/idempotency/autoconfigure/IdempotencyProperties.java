@@ -110,6 +110,25 @@ public class IdempotencyProperties {
      */
     private boolean cache5xx = true;
 
+    /**
+     * Whether the stored idempotency key is scoped to the authenticated
+     * principal, mitigating the IETF draft §5 data-leak where one user replays
+     * another user's cached response by reusing the same key.
+     *
+     * <ul>
+     *   <li>{@link PrincipalBinding#AUTO} (default) — scope to the principal
+     *       when the request is authenticated; fall back to the bare key when
+     *       it is anonymous, so public endpoints and existing behaviour are
+     *       unchanged.</li>
+     *   <li>{@link PrincipalBinding#DISABLED} — never scope; the bare key is
+     *       used exactly as in v0.0.3.</li>
+     *   <li>{@link PrincipalBinding#REQUIRED} — a tracked request that supplies
+     *       a key but resolves no principal is refused (422). Use on endpoints
+     *       that must never serve a cross-principal replay.</li>
+     * </ul>
+     */
+    private PrincipalBinding principalBinding = PrincipalBinding.AUTO;
+
     // === Getters / setters ===
 
     public boolean isEnabled() { return enabled; }
@@ -144,10 +163,13 @@ public class IdempotencyProperties {
     public Redis getRedis() { return redis; }
     public boolean isCache5xx() { return cache5xx; }
     public void setCache5xx(boolean cache5xx) { this.cache5xx = cache5xx; }
+    public PrincipalBinding getPrincipalBinding() { return principalBinding; }
+    public void setPrincipalBinding(PrincipalBinding principalBinding) { this.principalBinding = principalBinding; }
 
     public enum Backend { AUTO, JDBC, REDIS, IN_MEMORY }
     public enum FailureStrategy { FAIL_OPEN, FAIL_CLOSED }
     public enum PayloadValidation { ENABLED, DISABLED }
+    public enum PrincipalBinding { AUTO, DISABLED, REQUIRED }
 
     /** JDBC-specific knobs. */
     public static class Jdbc {

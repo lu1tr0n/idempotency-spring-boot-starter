@@ -2,10 +2,13 @@ package io.github.lu1tr0n.idempotency.aop;
 
 import io.github.lu1tr0n.idempotency.annotation.Idempotent;
 import io.github.lu1tr0n.idempotency.autoconfigure.IdempotencyProperties;
+import io.github.lu1tr0n.idempotency.autoconfigure.IdempotencyProperties.PrincipalBinding;
 import io.github.lu1tr0n.idempotency.core.IdempotencyKey;
 import io.github.lu1tr0n.idempotency.core.IdempotencyKeyResolver;
 import io.github.lu1tr0n.idempotency.core.IdempotencyRecord;
 import io.github.lu1tr0n.idempotency.core.IdempotencyStore;
+import io.github.lu1tr0n.idempotency.principal.IdempotencyPrincipalResolver;
+import io.github.lu1tr0n.idempotency.principal.PrincipalKeyComposer;
 
 import org.aopalliance.intercept.MethodInvocation;
 import org.aspectj.lang.ProceedingJoinPoint;
@@ -65,15 +68,24 @@ public class IdempotentAspect implements Ordered {
     private final IdempotencyStore store;
     private final IdempotencyProperties properties;
     private final IdempotentKeyResolver keyResolver;
+    private final IdempotencyPrincipalResolver principalResolver;
     private final IdempotentExpressionEvaluator expressionEvaluator;
     private final int order;
 
     public IdempotentAspect(IdempotencyStore store,
                             IdempotencyProperties properties,
                             IdempotentKeyResolver keyResolver) {
+        this(store, properties, keyResolver, null);
+    }
+
+    public IdempotentAspect(IdempotencyStore store,
+                            IdempotencyProperties properties,
+                            IdempotentKeyResolver keyResolver,
+                            IdempotencyPrincipalResolver principalResolver) {
         this.store = store;
         this.properties = properties;
         this.keyResolver = keyResolver;
+        this.principalResolver = principalResolver;
         this.expressionEvaluator = new IdempotentExpressionEvaluator();
         // Run BEFORE @Transactional (Ordered.LOWEST_PRECEDENCE) so a cache hit
         // short-circuits the transactional bean method without opening a tx.
@@ -104,6 +116,33 @@ public class IdempotentAspect implements Ordered {
                 method.getDeclaringClass().getSimpleName(), method.getName(),
                 truncateForLog(resolvedKey), ex.getMessage());
             return joinPoint.proceed();
+        }
+
+        // Scope the key to the authenticated principal (servlet stack; IETF §5).
+        // The aspect can wrap non-HTTP methods, so it cannot emit a 422 — it
+        // degrades the same way it does for lock contention / store errors:
+        // proceed without dedup and warn. HTTP enforcement of `required` is the
+        // servlet filter's job; reactive @Idempotent users put the principal in
+        // the SpEL key.
+        if (principalResolver != null && properties.getPrincipalBinding() != PrincipalBinding.DISABLED) {
+            Optional<String> principal = principalResolver.resolvePrincipal();
+            if (principal.isEmpty() && properties.getPrincipalBinding() == PrincipalBinding.REQUIRED) {
+                log.warn("@Idempotent on {}#{}: principal-binding=required but no principal resolved; "
+                        + "proceeding without idempotency (HTTP enforcement is the servlet filter's job).",
+                    method.getDeclaringClass().getSimpleName(), method.getName());
+                return joinPoint.proceed();
+            }
+            try {
+                // Authenticated → p:<token>:key; auto + anonymous → a:key. Both
+                // namespaced so the anonymous space can't forge a scoped key.
+                key = principal.isPresent()
+                    ? PrincipalKeyComposer.compose(principal.get(), key)
+                    : PrincipalKeyComposer.anonymous(key);
+            } catch (IllegalArgumentException tooLong) {
+                log.warn("@Idempotent on {}#{}: {} proceeding without idempotency.",
+                    method.getDeclaringClass().getSimpleName(), method.getName(), tooLong.getMessage());
+                return joinPoint.proceed();
+            }
         }
 
         // Existing record → replay.

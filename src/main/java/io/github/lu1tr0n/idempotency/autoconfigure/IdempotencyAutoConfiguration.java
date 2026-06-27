@@ -3,10 +3,14 @@ package io.github.lu1tr0n.idempotency.autoconfigure;
 import io.github.lu1tr0n.idempotency.core.HeaderIdempotencyKeyResolver;
 import io.github.lu1tr0n.idempotency.core.IdempotencyKeyResolver;
 import io.github.lu1tr0n.idempotency.core.IdempotencyStore;
+import io.github.lu1tr0n.idempotency.principal.IdempotencyPrincipalResolver;
+import io.github.lu1tr0n.idempotency.principal.PrincipalScopingKeyResolver;
 import io.github.lu1tr0n.idempotency.servlet.IdempotencyFilter;
 
 import jakarta.servlet.http.HttpServletRequest;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
@@ -34,6 +38,8 @@ import org.springframework.context.annotation.Configuration;
 @ConditionalOnProperty(prefix = "spring.idempotency", name = "enabled", havingValue = "true", matchIfMissing = true)
 @EnableConfigurationProperties(IdempotencyProperties.class)
 public class IdempotencyAutoConfiguration {
+
+    private static final Logger log = LoggerFactory.getLogger(IdempotencyAutoConfiguration.class);
 
     /**
      * Default header-based key resolver. Replace by defining your own
@@ -65,9 +71,45 @@ public class IdempotencyAutoConfiguration {
     @ConditionalOnMissingBean
     public IdempotencyFilter idempotencyFilter(IdempotencyStore store,
                                                ObjectProvider<IdempotencyKeyResolver> resolverProvider,
+                                               ObjectProvider<IdempotencyPrincipalResolver> principalProvider,
                                                IdempotencyProperties properties) {
         IdempotencyKeyResolver resolver = resolverProvider.getIfAvailable(
             () -> new HeaderIdempotencyKeyResolver(properties.getHeaderName()));
+        resolver = applyPrincipalBinding(resolver, principalProvider, properties);
         return new IdempotencyFilter(store, resolver, properties);
+    }
+
+    /**
+     * Wraps the key resolver so the stored key is scoped to the authenticated
+     * principal, unless binding is {@code disabled}. With {@code required} and
+     * no resolver available, fail fast at startup rather than 422-ing every
+     * request — a missing resolver there is a deployment mistake.
+     */
+    private static IdempotencyKeyResolver applyPrincipalBinding(
+            IdempotencyKeyResolver resolver,
+            ObjectProvider<IdempotencyPrincipalResolver> principalProvider,
+            IdempotencyProperties properties) {
+        IdempotencyProperties.PrincipalBinding binding = properties.getPrincipalBinding();
+        if (binding == IdempotencyProperties.PrincipalBinding.DISABLED) {
+            return resolver;
+        }
+        IdempotencyPrincipalResolver principalResolver = principalProvider.getIfAvailable();
+        if (principalResolver == null) {
+            if (binding == IdempotencyProperties.PrincipalBinding.REQUIRED) {
+                throw new IllegalStateException(
+                    "spring.idempotency.principal-binding=required but no IdempotencyPrincipalResolver "
+                        + "bean is available. Put Spring Security on the classpath or define your own "
+                        + "IdempotencyPrincipalResolver bean.");
+            }
+            // auto + no resolver → keys are NOT principal-scoped. Fail loud so a
+            // deployment that expected isolation isn't silently unprotected.
+            log.warn("spring.idempotency.principal-binding=auto but no IdempotencyPrincipalResolver bean "
+                + "is available; idempotency keys are NOT scoped to the principal. Put Spring Security on "
+                + "the classpath or define your own IdempotencyPrincipalResolver bean to enable scoping.");
+            return resolver;
+        }
+        return new PrincipalScopingKeyResolver(
+            resolver, principalResolver,
+            binding == IdempotencyProperties.PrincipalBinding.REQUIRED);
     }
 }
