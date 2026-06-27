@@ -155,6 +155,37 @@ public class IdempotencyProperties {
      */
     private DataSize maxBodySize = DataSize.ofMegabytes(1);
 
+    /**
+     * HTTP status codes that, when returned by the downstream handler, are
+     * <strong>not</strong> persisted as the idempotency record: the lock is
+     * released instead of saved, so the very same {@code Idempotency-Key} can be
+     * reused on a corrected retry rather than being pinned to the failure for
+     * the full TTL.
+     *
+     * <p>Default <strong>empty</strong> — every handler response (2xx/3xx/4xx)
+     * is cached as before, so this changes nothing unless you opt in. A common
+     * starting set is {@code [400, 401, 403, 429]}: a malformed request (400),
+     * an unauthenticated/forbidden one (401/403) or a rate-limited one (429)
+     * never committed the operation, so replaying that failure on retry is
+     * unhelpful. Leave committed business outcomes — {@code 402} card-declined,
+     * {@code 404} not-found, {@code 409} conflict, {@code 422} unprocessable —
+     * out of the set so they keep replaying.
+     *
+     * <p>This only governs the handler's own responses. The starter's own
+     * rejections (invalid-key 400, lock-held 409, payload-mismatch 422,
+     * principal-required 422, payload-too-large 413) are written before the
+     * handler runs and were never cached, so listing those codes here has no
+     * effect on them. A 5xx <em>not</em> listed here stays controlled by
+     * {@code cache-5xx}; listing a specific 5xx opts it out even when
+     * {@code cache-5xx} is {@code true}.
+     *
+     * <p>Note: a released key carries no stored payload hash, so a retry with a
+     * <em>different</em> (corrected) body will not trip the payload-mismatch
+     * 422. This is a deliberate convenience and differs from Stripe, which
+     * caches executed errors and expects a fresh key after correcting input.
+     */
+    private Set<Integer> nonCacheableStatuses = new LinkedHashSet<>();
+
     // === Getters / setters ===
 
     public boolean isEnabled() { return enabled; }
@@ -193,6 +224,22 @@ public class IdempotencyProperties {
     public void setPrincipalBinding(PrincipalBinding principalBinding) { this.principalBinding = principalBinding; }
     public DataSize getMaxBodySize() { return maxBodySize; }
     public void setMaxBodySize(DataSize maxBodySize) { this.maxBodySize = maxBodySize; }
+    public Set<Integer> getNonCacheableStatuses() { return nonCacheableStatuses; }
+    public void setNonCacheableStatuses(Set<Integer> nonCacheableStatuses) { this.nonCacheableStatuses = nonCacheableStatuses; }
+
+    /**
+     * Single decision point for whether a handler response with the given
+     * status should be persisted as the idempotency record. Folds the two
+     * opt-outs: 5xx responses when {@link #isCache5xx() cache-5xx} is off, and
+     * any status listed in {@link #getNonCacheableStatuses() non-cacheable-statuses}.
+     * A {@code false} result means the lock is released instead of saved.
+     */
+    public boolean shouldCache(int status) {
+        if (!cache5xx && status >= 500 && status < 600) {
+            return false;
+        }
+        return !nonCacheableStatuses.contains(status);
+    }
 
     /**
      * The {@link #getMaxBodySize() max body size} resolved to an {@code int}

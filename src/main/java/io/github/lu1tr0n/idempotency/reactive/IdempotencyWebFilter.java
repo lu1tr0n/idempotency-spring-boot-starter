@@ -209,8 +209,8 @@ public class IdempotencyWebFilter implements WebFilter, Ordered {
     private void persistOrRelease(IdempotencyKey key, IdempotencyStore.LockToken token,
                                   String payloadHash, CapturingResponseDecorator capturing) {
         int status = capturing.statusValue();
-        if (!properties.isCache5xx() && status >= 500 && status < 600) {
-            log.debug("WebFlux idempotency skip cache for 5xx (key={}, status={})", key.value(), status);
+        if (!properties.shouldCache(status)) {
+            log.debug("WebFlux idempotency skip cache (key={}, status={})", key.value(), status);
             safeReleaseLock(key, token);
             return;
         }

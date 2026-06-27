@@ -228,17 +228,18 @@ public class IdempotencyFilter extends OncePerRequestFilter {
 
         if (chainThrew) return; // unreachable, but keeps the compiler honest
 
-        // 5xx-cache opt-out: when disabled, a downstream blip (502 from an
-        // upstream, 503 during a deploy) does not poison the cache for the
-        // full TTL. The lock is released instead of the record being saved
-        // so the next retry can re-attempt the operation cleanly.
-        if (!properties.isCache5xx() && capturing.capturedStatus() >= 500 && capturing.capturedStatus() < 600) {
-            log.debug("Skipping idempotency cache for 5xx response (key={}, status={}); releasing lock.",
-                key.value(), capturing.capturedStatus());
+        // Non-cacheable status: a 5xx blip when cache-5xx is off, or a status
+        // listed in non-cacheable-statuses (e.g. a 400 the client can fix).
+        // Release the lock instead of saving so the same key can be retried
+        // cleanly rather than being pinned to the failure for the full TTL.
+        int capturedStatus = capturing.capturedStatus();
+        if (!properties.shouldCache(capturedStatus)) {
+            log.debug("Skipping idempotency cache (key={}, status={}); releasing lock.",
+                key.value(), capturedStatus);
             try {
                 store.releaseLock(key, token);
             } catch (IdempotencyStore.StoreException releaseFailure) {
-                log.warn("Failed to release lock after 5xx skip (key={}). Lock will expire after {}.",
+                log.warn("Failed to release lock after non-cacheable status (key={}). Lock will expire after {}.",
                     key.value(), properties.getLockTimeout(), releaseFailure);
             }
             return;
