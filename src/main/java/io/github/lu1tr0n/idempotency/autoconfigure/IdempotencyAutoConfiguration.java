@@ -4,6 +4,8 @@ import io.github.lu1tr0n.idempotency.core.HeaderIdempotencyKeyResolver;
 import io.github.lu1tr0n.idempotency.core.IdempotencyKeyResolver;
 import io.github.lu1tr0n.idempotency.core.IdempotencyStore;
 import io.github.lu1tr0n.idempotency.health.IdempotencyStoreHealthIndicator;
+import io.github.lu1tr0n.idempotency.heartbeat.LockHeartbeat;
+import io.github.lu1tr0n.idempotency.heartbeat.ScheduledLockHeartbeat;
 import io.github.lu1tr0n.idempotency.observability.IdempotencyObservations;
 import io.github.lu1tr0n.idempotency.principal.IdempotencyPrincipalResolver;
 import io.github.lu1tr0n.idempotency.principal.PrincipalScopingKeyResolver;
@@ -92,12 +94,51 @@ public class IdempotencyAutoConfiguration {
                                                ObjectProvider<IdempotencyKeyResolver> resolverProvider,
                                                ObjectProvider<IdempotencyPrincipalResolver> principalProvider,
                                                ObjectProvider<IdempotencyObservations> observationsProvider,
+                                               ObjectProvider<LockHeartbeat> heartbeatProvider,
                                                IdempotencyProperties properties) {
         IdempotencyKeyResolver resolver = resolverProvider.getIfAvailable(
             () -> new HeaderIdempotencyKeyResolver(properties.getHeaderName()));
         resolver = applyPrincipalBinding(resolver, principalProvider, properties);
         IdempotencyObservations observations = observationsProvider.getIfAvailable(IdempotencyObservations::noop);
-        return new IdempotencyFilter(store, resolver, properties, observations);
+        LockHeartbeat heartbeat = heartbeatProvider.getIfAvailable(() -> LockHeartbeat.NOOP);
+        return new IdempotencyFilter(store, resolver, properties, observations, heartbeat);
+    }
+
+    /**
+     * Opt-in lock-extension heartbeat. Active only when
+     * {@code spring.idempotency.lock-extension.enabled=true} and the resolved
+     * store actually supports extension — otherwise it is disabled with a warning
+     * so operators are never misled into thinking a long handler is protected.
+     *
+     * <p>Defined on the outer auto-config (not a nested {@code @Configuration})
+     * for the same reason as {@code idempotencyFilter}: the
+     * {@code @ConditionalOnBean(IdempotencyStore.class)} only evaluates correctly
+     * here, where {@code after = {…StoreAutoConfiguration}} guarantees the store
+     * definition is present.
+     */
+    @Bean
+    @ConditionalOnProperty(prefix = "spring.idempotency.lock-extension", name = "enabled", havingValue = "true")
+    @ConditionalOnBean(IdempotencyStore.class)
+    @ConditionalOnMissingBean(LockHeartbeat.class)
+    public LockHeartbeat lockHeartbeat(IdempotencyStore store, IdempotencyProperties properties) {
+        if (!store.supportsLockExtension()) {
+            log.warn("spring.idempotency.lock-extension.enabled=true but the active store ({}) does not support lock "
+                + "extension; the heartbeat is disabled. Long-running handlers remain subject to lock-timeout expiry.",
+                store.getClass().getSimpleName());
+            return LockHeartbeat.NOOP;
+        }
+        java.time.Duration lockTimeout = properties.getLockTimeout();
+        java.time.Duration configured = properties.getLockExtension().getInterval();
+        java.time.Duration interval = (configured != null && !configured.isZero() && !configured.isNegative())
+            ? configured : lockTimeout.dividedBy(3);
+        if (interval.compareTo(lockTimeout) >= 0) {
+            log.warn("spring.idempotency.lock-extension.interval ({}) is >= lock-timeout ({}); the lock can lapse "
+                + "between renewals. Use an interval well below lock-timeout (the default is lock-timeout/3).",
+                interval, lockTimeout);
+        }
+        log.info("Idempotency lock-extension heartbeat active (interval={}, renew={}, store={}).",
+            interval, lockTimeout, store.getClass().getSimpleName());
+        return new ScheduledLockHeartbeat(store, interval, lockTimeout, properties.getTtl(), 1);
     }
 
     /**

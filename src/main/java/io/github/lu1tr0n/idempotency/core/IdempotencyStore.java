@@ -80,6 +80,41 @@ public interface IdempotencyStore {
      */
     void releaseLock(IdempotencyKey key, LockToken token);
 
+    /**
+     * Extends the lock held under {@code token} for another {@code ttl}, used by
+     * the optional lock-extension heartbeat to keep a long-running handler's lock
+     * from expiring mid-flight (which would let a concurrent retry steal it and
+     * re-run the operation).
+     *
+     * <p>Must be <strong>token-checked</strong>: only the current owner extends,
+     * so a lock that already expired and was re-acquired by someone else, or that
+     * {@link #save}/{@link #releaseLock} already cleared, is <em>not</em> revived.
+     *
+     * @return {@code true} if the lock is still held by this token and was
+     *         extended; {@code false} if the token no longer owns the lock (the
+     *         caller should stop the heartbeat — the operation is now running
+     *         without idempotency protection).
+     *
+     * <p>The default is a no-op returning {@code true} ("nothing to revoke"), so a
+     * store that does not implement extension keeps plain acquire-time TTL expiry.
+     * Such a store should also leave {@link #supportsLockExtension()} at
+     * {@code false} so the heartbeat is not silently believed to be active.
+     */
+    default boolean extendLock(IdempotencyKey key, LockToken token, Duration ttl) {
+        return true;
+    }
+
+    /**
+     * Whether this store implements {@link #extendLock} with real semantics.
+     * Default {@code false}: the auto-configuration warns and disables the
+     * heartbeat when {@code spring.idempotency.lock-extension.enabled=true} but
+     * the active store cannot actually extend, so operators are never lulled into
+     * believing a long handler is protected when it is not.
+     */
+    default boolean supportsLockExtension() {
+        return false;
+    }
+
     /** Marker for the opaque token returned from {@link #acquireLock}. */
     interface LockToken {}
 

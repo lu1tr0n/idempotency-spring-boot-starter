@@ -98,6 +98,9 @@ public class IdempotencyProperties {
     /** Actuator health-indicator configuration. */
     private final Health health = new Health();
 
+    /** Lock-extension (heartbeat) configuration. */
+    private final LockExtension lockExtension = new LockExtension();
+
     /** JDBC-specific configuration. */
     private final Jdbc jdbc = new Jdbc();
 
@@ -253,6 +256,7 @@ public class IdempotencyProperties {
     public void setPayloadValidation(PayloadValidation pv) { this.payloadValidation = pv; }
     public Observations getObservations() { return observations; }
     public Health getHealth() { return health; }
+    public LockExtension getLockExtension() { return lockExtension; }
     public Jdbc getJdbc() { return jdbc; }
     public Redis getRedis() { return redis; }
     public boolean isCache5xx() { return cache5xx; }
@@ -356,6 +360,40 @@ public class IdempotencyProperties {
 
         public Duration getCacheTtl() { return cacheTtl; }
         public void setCacheTtl(Duration cacheTtl) { this.cacheTtl = cacheTtl; }
+    }
+
+    /**
+     * Lock-extension (heartbeat) knobs. When {@code enabled}, a background
+     * heartbeat renews the in-flight lock of a running handler so it cannot
+     * expire mid-flight and be stolen by a concurrent retry (which would re-run
+     * the operation). Off by default: it adds a background scheduler and store
+     * load, and it <strong>narrows but does not close</strong> the
+     * duplicate-execution window (a stop-the-world pause or store partition
+     * longer than {@code lock-timeout} still lapses the lease). Only the JDBC,
+     * Redis and in-memory stores support extension; against a store that does
+     * not, the heartbeat is disabled with a startup warning.
+     */
+    public static class LockExtension {
+        /**
+         * Master switch for the heartbeat. Default {@code false} — opt in only for
+         * endpoints whose handlers can legitimately run longer than
+         * {@code lock-timeout}, and design those handlers to tolerate the residual
+         * steal window regardless (see the README).
+         */
+        private boolean enabled = false;
+
+        /**
+         * How often the lock is renewed. When unset, defaults to
+         * {@code lock-timeout / 3} — renewing at a third of the window tolerates a
+         * missed beat before the lock would expire. Each renewal slides the lock
+         * forward by a full {@code lock-timeout}.
+         */
+        private Duration interval;
+
+        public boolean isEnabled() { return enabled; }
+        public void setEnabled(boolean enabled) { this.enabled = enabled; }
+        public Duration getInterval() { return interval; }
+        public void setInterval(Duration interval) { this.interval = interval; }
     }
 
     /** JDBC-specific knobs. */

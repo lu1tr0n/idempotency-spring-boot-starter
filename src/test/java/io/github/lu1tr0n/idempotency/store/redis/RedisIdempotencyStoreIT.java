@@ -162,6 +162,27 @@ class RedisIdempotencyStoreIT {
     }
 
     @Test
+    void extendLock_renewsTtlAndIsTokenChecked() throws InterruptedException {
+        IdempotencyKey key = IdempotencyKey.of("ext-redis");
+        IdempotencyStore.LockToken token = store.acquireLock(key, Duration.ofMillis(300)).orElseThrow();
+
+        assertThat(store.supportsLockExtension()).isTrue();
+        assertThat(store.extendLock(key, token, Duration.ofSeconds(10))).isTrue();
+
+        // Past the original 300ms PX: PEXPIRE slid the lock key forward, so a
+        // concurrent SET NX cannot acquire.
+        Thread.sleep(450);
+        assertThat(store.acquireLock(key, Duration.ofMillis(300)))
+            .as("extended Redis lock is not stealable past its original PX")
+            .isEmpty();
+
+        // A token for another key cannot extend this one (Lua GET==token guard).
+        IdempotencyStore.LockToken other =
+            store.acquireLock(IdempotencyKey.of("ext-redis-2"), Duration.ofSeconds(1)).orElseThrow();
+        assertThat(store.extendLock(key, other, Duration.ofSeconds(10))).isFalse();
+    }
+
+    @Test
     void headersWithSpecialCharacters_roundTripIntact() {
         IdempotencyKey key = IdempotencyKey.of("special-headers-001");
         IdempotencyStore.LockToken token = store.acquireLock(key, Duration.ofSeconds(30)).orElseThrow();

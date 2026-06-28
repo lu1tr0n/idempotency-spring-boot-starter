@@ -232,6 +232,41 @@ public class JdbcIdempotencyStore implements IdempotencyStore, IdempotencyStoreH
     }
 
     @Override
+    public boolean supportsLockExtension() {
+        return true;
+    }
+
+    /**
+     * Slides the in-flight lock window forward by {@code ttl}. Extends BOTH
+     * {@code locked_until} and {@code expires_at} to preserve the in-flight
+     * invariant {@code expires_at == locked_until}: the steal predicate's
+     * unqualified {@code OR expires_at < now} branch would otherwise fire while
+     * the lock is being heartbeat-extended, letting a concurrent caller steal a
+     * live lock. Token-checked, so it is a 0-row no-op once {@link #save} has
+     * cleared {@code lock_token} or another owner re-acquired the row.
+     */
+    @Override
+    public boolean extendLock(IdempotencyKey key, LockToken token, Duration ttl) {
+        String tokenValue = unwrap(token);
+        Instant newExpiry = Instant.now().plus(ttl);
+        try {
+            int updated = jdbc.update(
+                "UPDATE " + tableName
+                    + " SET locked_until = ?, expires_at = ?"
+                    + " WHERE idempotency_key = ? AND lock_token = ?",
+                ps -> {
+                    ps.setTimestamp(1, Timestamp.from(newExpiry));
+                    ps.setTimestamp(2, Timestamp.from(newExpiry));
+                    ps.setString(3, key.value());
+                    ps.setString(4, tokenValue);
+                });
+            return updated == 1;
+        } catch (DataAccessException e) {
+            throw new StoreException("Failed to extend idempotency lock for key " + key, e);
+        }
+    }
+
+    @Override
     public void save(IdempotencyRecord record, LockToken token) {
         String tokenValue = unwrap(token);
         try {

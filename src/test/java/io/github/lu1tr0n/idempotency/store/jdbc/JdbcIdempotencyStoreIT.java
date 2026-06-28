@@ -249,4 +249,34 @@ class JdbcIdempotencyStoreIT {
         assertThat(replayed.headers().get("Set-Cookie"))
             .containsExactly("session=abc; HttpOnly", "lang=es; Secure");
     }
+
+    @Test
+    void extendLockSlidesBothClocksPreventingSteal() throws InterruptedException {
+        IdempotencyKey key = IdempotencyKey.of("ext-dual");
+        IdempotencyStore.LockToken token = store.acquireLock(key, Duration.ofMillis(300)).orElseThrow();
+
+        assertThat(store.supportsLockExtension()).isTrue();
+        assertThat(store.extendLock(key, token, Duration.ofSeconds(10))).isTrue();
+
+        // Past the ORIGINAL 300ms window. The extend slid BOTH locked_until and
+        // expires_at forward; had it left expires_at behind, the steal predicate's
+        // unqualified `OR expires_at < now` branch would steal this live,
+        // heartbeat-extended lock — the regression this test guards.
+        Thread.sleep(450);
+        assertThat(store.acquireLock(key, Duration.ofMillis(300)))
+            .as("extended lock is not stealable past its original window")
+            .isEmpty();
+    }
+
+    @Test
+    void extendLockIsTokenChecked() {
+        IdempotencyKey a = IdempotencyKey.of("ext-a");
+        IdempotencyKey b = IdempotencyKey.of("ext-b");
+        store.acquireLock(a, Duration.ofSeconds(1)).orElseThrow();
+        IdempotencyStore.LockToken tokenB = store.acquireLock(b, Duration.ofSeconds(1)).orElseThrow();
+
+        assertThat(store.extendLock(a, tokenB, Duration.ofSeconds(10)))
+            .as("a token for another key cannot extend this lock")
+            .isFalse();
+    }
 }

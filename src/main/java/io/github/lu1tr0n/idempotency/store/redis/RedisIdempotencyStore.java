@@ -88,8 +88,22 @@ public class RedisIdempotencyStore implements IdempotencyStore, IdempotencyStore
         end
         """;
 
+    /**
+     * Atomic lock extension: slide the lock key's TTL forward only if the caller
+     * still holds it. {@code PEXPIRE} returns 1 when the key exists (extended), 0
+     * when it is gone — so a token mismatch or an already-released lock yields 0.
+     */
+    private static final String EXTEND_LUA = """
+        if redis.call('GET', KEYS[1]) == ARGV[1] then
+            return redis.call('PEXPIRE', KEYS[1], ARGV[2])
+        else
+            return 0
+        end
+        """;
+
     private static final RedisScript<Long> SAVE_SCRIPT = new DefaultRedisScript<>(SAVE_LUA, Long.class);
     private static final RedisScript<Long> RELEASE_SCRIPT = new DefaultRedisScript<>(RELEASE_LUA, Long.class);
+    private static final RedisScript<Long> EXTEND_SCRIPT = new DefaultRedisScript<>(EXTEND_LUA, Long.class);
 
     private final StringRedisTemplate redis;
     private final String lockPrefix;
@@ -180,6 +194,28 @@ public class RedisIdempotencyStore implements IdempotencyStore, IdempotencyStore
             // satisfied either way.
         } catch (DataAccessException e) {
             throw new StoreException("Failed to release lock for key " + key, e);
+        }
+    }
+
+    @Override
+    public boolean supportsLockExtension() {
+        return true;
+    }
+
+    @Override
+    public boolean extendLock(IdempotencyKey key, LockToken token, Duration ttl) {
+        String tokenValue = unwrap(token);
+        long ttlMs = Math.max(1L, ttl.toMillis());
+        try {
+            Long result = redis.execute(
+                EXTEND_SCRIPT,
+                List.of(lockPrefix + key.value()),
+                tokenValue,
+                String.valueOf(ttlMs)
+            );
+            return result != null && result == 1L;
+        } catch (DataAccessException e) {
+            throw new StoreException("Failed to extend lock for key " + key, e);
         }
     }
 

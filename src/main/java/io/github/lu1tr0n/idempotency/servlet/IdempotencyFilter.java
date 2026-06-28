@@ -6,6 +6,7 @@ import io.github.lu1tr0n.idempotency.core.IdempotencyKeyResolver;
 import io.github.lu1tr0n.idempotency.core.IdempotencyRecord;
 import io.github.lu1tr0n.idempotency.core.IdempotencyStore;
 import io.github.lu1tr0n.idempotency.core.PayloadHasher;
+import io.github.lu1tr0n.idempotency.heartbeat.LockHeartbeat;
 import io.github.lu1tr0n.idempotency.observability.IdempotencyObservations;
 import io.github.lu1tr0n.idempotency.observability.IdempotencyObservations.Outcome;
 
@@ -85,21 +86,31 @@ public class IdempotencyFilter extends OncePerRequestFilter {
     private final int maxBodyBytes;
     private final int maxResponseBytes;
     private final IdempotencyObservations observations;
+    private final LockHeartbeat heartbeat;
 
     public IdempotencyFilter(IdempotencyStore store,
                              IdempotencyKeyResolver keyResolver,
                              IdempotencyProperties properties) {
-        this(store, keyResolver, properties, IdempotencyObservations.noop());
+        this(store, keyResolver, properties, IdempotencyObservations.noop(), LockHeartbeat.NOOP);
     }
 
     public IdempotencyFilter(IdempotencyStore store,
                              IdempotencyKeyResolver keyResolver,
                              IdempotencyProperties properties,
                              IdempotencyObservations observations) {
+        this(store, keyResolver, properties, observations, LockHeartbeat.NOOP);
+    }
+
+    public IdempotencyFilter(IdempotencyStore store,
+                             IdempotencyKeyResolver keyResolver,
+                             IdempotencyProperties properties,
+                             IdempotencyObservations observations,
+                             LockHeartbeat heartbeat) {
         this.store = store;
         this.keyResolver = keyResolver;
         this.properties = properties;
         this.observations = observations;
+        this.heartbeat = heartbeat;
         // Pre-normalise once instead of upper-casing per request.
         this.trackedMethods = Set.copyOf(properties.getMethods().stream()
             .map(m -> m.toUpperCase(Locale.ROOT))
@@ -231,61 +242,69 @@ public class IdempotencyFilter extends OncePerRequestFilter {
             return;
         }
 
-        // Execute the chain and snapshot the response.
+        // Execute the chain and snapshot the response. The heartbeat (a no-op
+        // unless lock-extension is enabled) renews the lock while the handler
+        // runs; the finally stops it on every exit path — success, skip,
+        // over-cap, or a thrown handler.
         IdempotencyStore.LockToken token = lock.get();
-        CapturingHttpServletResponseWrapper capturing = new CapturingHttpServletResponseWrapper(response, maxResponseBytes);
-        boolean chainThrew = false;
+        LockHeartbeat.Handle heartbeatHandle = heartbeat.start(key, token);
         try {
-            chain.doFilter(cachedRequest, capturing);
-        } catch (RuntimeException | IOException | ServletException ex) {
-            chainThrew = true;
-            store.releaseLock(key, token);
-            throw rethrow(ex);
-        }
+            CapturingHttpServletResponseWrapper capturing = new CapturingHttpServletResponseWrapper(response, maxResponseBytes);
+            boolean chainThrew = false;
+            try {
+                chain.doFilter(cachedRequest, capturing);
+            } catch (RuntimeException | IOException | ServletException ex) {
+                chainThrew = true;
+                store.releaseLock(key, token);
+                throw rethrow(ex);
+            }
 
-        if (chainThrew) return; // unreachable, but keeps the compiler honest
+            if (chainThrew) return; // unreachable, but keeps the compiler honest
 
-        // Non-cacheable status: a 5xx blip when cache-5xx is off, or a status
-        // listed in non-cacheable-statuses (e.g. a 400 the client can fix).
-        // Release the lock instead of saving so the same key can be retried
-        // cleanly rather than being pinned to the failure for the full TTL.
-        int capturedStatus = capturing.capturedStatus();
-        if (!properties.shouldCache(capturedStatus)) {
-            log.debug("Skipping idempotency cache (key={}, status={}); releasing lock.",
-                key.value(), capturedStatus);
-            releaseAfterSkip(key, token);
-            observations.record(Outcome.EXECUTED_NOT_STORED, capturedStatus);
-            return;
-        }
+            // Non-cacheable status: a 5xx blip when cache-5xx is off, or a status
+            // listed in non-cacheable-statuses (e.g. a 400 the client can fix).
+            // Release the lock instead of saving so the same key can be retried
+            // cleanly rather than being pinned to the failure for the full TTL.
+            int capturedStatus = capturing.capturedStatus();
+            if (!properties.shouldCache(capturedStatus)) {
+                log.debug("Skipping idempotency cache (key={}, status={}); releasing lock.",
+                    key.value(), capturedStatus);
+                releaseAfterSkip(key, token);
+                observations.record(Outcome.EXECUTED_NOT_STORED, capturedStatus);
+                return;
+            }
 
-        // Response exceeded max-response-size: the client already received the
-        // full body (the wrapper tees unconditionally) but the snapshot was
-        // abandoned to bound memory, so there is nothing to cache. Release the
-        // lock — a retry re-executes. WARN, not debug: this silently disables
-        // idempotency for the key, which operators should see.
-        if (capturing.isOverCap()) {
-            log.warn("Response exceeded max-response-size (key={}, status={}); not caching, releasing lock. "
-                    + "A retry will re-execute the handler — raise spring.idempotency.max-response-size if this "
-                    + "endpoint legitimately returns large responses.", key.value(), capturedStatus);
-            releaseAfterSkip(key, token);
-            observations.record(Outcome.EXECUTED_NOT_STORED, capturedStatus);
-            return;
-        }
+            // Response exceeded max-response-size: the client already received the
+            // full body (the wrapper tees unconditionally) but the snapshot was
+            // abandoned to bound memory, so there is nothing to cache. Release the
+            // lock — a retry re-executes. WARN, not debug: this silently disables
+            // idempotency for the key, which operators should see.
+            if (capturing.isOverCap()) {
+                log.warn("Response exceeded max-response-size (key={}, status={}); not caching, releasing lock. "
+                        + "A retry will re-execute the handler — raise spring.idempotency.max-response-size if this "
+                        + "endpoint legitimately returns large responses.", key.value(), capturedStatus);
+                releaseAfterSkip(key, token);
+                observations.record(Outcome.EXECUTED_NOT_STORED, capturedStatus);
+                return;
+            }
 
-        // Persist the captured response. This implicitly releases the lock.
-        try {
-            IdempotencyRecord record = snapshot(key, payloadHash, capturing);
-            store.save(record, token);
-            observations.record(Outcome.EXECUTED_STORED, capturedStatus);
-        } catch (IdempotencyStore.StoreException storeFailure) {
-            // The user has already seen the response — the chain wrote to the
-            // wrapped response which tees to the real one. We can no longer
-            // fail-closed: the caller already got their answer. Log and move
-            // on; the lock will expire on its own.
-            log.warn("Idempotency record save failed after successful response (key={}). Lock will expire after {}.",
-                key.value(), properties.getLockTimeout(), storeFailure);
-            // The handler ran but the response could not be persisted.
-            observations.record(Outcome.EXECUTED_NOT_STORED, capturedStatus);
+            // Persist the captured response. This implicitly releases the lock.
+            try {
+                IdempotencyRecord record = snapshot(key, payloadHash, capturing);
+                store.save(record, token);
+                observations.record(Outcome.EXECUTED_STORED, capturedStatus);
+            } catch (IdempotencyStore.StoreException storeFailure) {
+                // The user has already seen the response — the chain wrote to the
+                // wrapped response which tees to the real one. We can no longer
+                // fail-closed: the caller already got their answer. Log and move
+                // on; the lock will expire on its own.
+                log.warn("Idempotency record save failed after successful response (key={}). Lock will expire after {}.",
+                    key.value(), properties.getLockTimeout(), storeFailure);
+                // The handler ran but the response could not be persisted.
+                observations.record(Outcome.EXECUTED_NOT_STORED, capturedStatus);
+            }
+        } finally {
+            heartbeatHandle.stop();
         }
     }
 

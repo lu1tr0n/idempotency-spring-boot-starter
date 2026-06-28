@@ -6,6 +6,7 @@ import io.github.lu1tr0n.idempotency.core.IdempotencyKey;
 import io.github.lu1tr0n.idempotency.core.IdempotencyRecord;
 import io.github.lu1tr0n.idempotency.core.IdempotencyStore;
 import io.github.lu1tr0n.idempotency.core.PayloadHasher;
+import io.github.lu1tr0n.idempotency.heartbeat.LockHeartbeat;
 import io.github.lu1tr0n.idempotency.exception.IdempotencyKeyTooLongException;
 import io.github.lu1tr0n.idempotency.exception.IdempotencyPrincipalRequiredException;
 import io.github.lu1tr0n.idempotency.principal.PrincipalKeyComposer;
@@ -74,6 +75,7 @@ public class IdempotencyWebFilter implements WebFilter, Ordered {
     private final IdempotencyProperties properties;
     private final Set<String> trackedMethods;
     private final ReactiveIdempotencyPrincipalResolver principalResolver;
+    private final LockHeartbeat heartbeat;
     private final int maxBodyBytes;
     private final int maxResponseBytes;
 
@@ -83,9 +85,16 @@ public class IdempotencyWebFilter implements WebFilter, Ordered {
 
     public IdempotencyWebFilter(IdempotencyStore store, IdempotencyProperties properties,
                                 ReactiveIdempotencyPrincipalResolver principalResolver) {
+        this(store, properties, principalResolver, LockHeartbeat.NOOP);
+    }
+
+    public IdempotencyWebFilter(IdempotencyStore store, IdempotencyProperties properties,
+                                ReactiveIdempotencyPrincipalResolver principalResolver,
+                                LockHeartbeat heartbeat) {
         this.store = store;
         this.properties = properties;
         this.principalResolver = principalResolver;
+        this.heartbeat = heartbeat;
         this.trackedMethods = Set.copyOf(properties.getMethods().stream()
             .map(m -> m.toUpperCase(Locale.ROOT))
             .toList());
@@ -197,13 +206,20 @@ public class IdempotencyWebFilter implements WebFilter, Ordered {
         }
 
         IdempotencyStore.LockToken token = lock.get();
+        // Renew the lock while the handler runs (no-op unless lock-extension is
+        // enabled). doFinally stops it on complete, error AND cancel — the cancel
+        // (client disconnect) path is why it must be doFinally: doOnSuccess /
+        // doOnError don't fire on cancel, so without this a disconnected request
+        // would have its lock renewed forever.
+        LockHeartbeat.Handle heartbeatHandle = heartbeat.start(key, token);
         CapturingResponseDecorator capturing = new CapturingResponseDecorator(exchange.getResponse(), maxResponseBytes);
         ServerHttpRequest cachedRequest = new CachedBodyServerHttpRequestDecorator(original, bodyBytes);
         ServerWebExchange mutated = exchange.mutate().request(cachedRequest).response(capturing).build();
 
         return chain.filter(mutated)
             .doOnSuccess(ignored -> persistOrRelease(key, token, payloadHash, capturing))
-            .doOnError(ex -> safeReleaseLock(key, token));
+            .doOnError(ex -> safeReleaseLock(key, token))
+            .doFinally(signal -> heartbeatHandle.stop());
     }
 
     private void persistOrRelease(IdempotencyKey key, IdempotencyStore.LockToken token,

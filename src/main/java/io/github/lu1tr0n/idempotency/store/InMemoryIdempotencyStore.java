@@ -71,6 +71,28 @@ public class InMemoryIdempotencyStore implements IdempotencyStore, IdempotencySt
         locks.remove(key.value());
     }
 
+    @Override
+    public boolean supportsLockExtension() {
+        return true;
+    }
+
+    @Override
+    public boolean extendLock(IdempotencyKey key, LockToken token, Duration ttl) {
+        Instant newExpiry = Instant.now().plus(ttl);
+        boolean[] extended = {false};
+        // Token-checked and non-throwing (unlike verifyToken): a mismatched or
+        // absent lock is simply not extended — the heartbeat treats the false
+        // return as "lock lost" and stops.
+        locks.computeIfPresent(key.value(), (k, current) -> {
+            if (current.token.equals(token)) {
+                extended[0] = true;
+                return new Lock(current.token, newExpiry);
+            }
+            return current;
+        });
+        return extended[0];
+    }
+
     private void verifyToken(String key, LockToken token) {
         Lock held = locks.get(key);
         if (held == null) {

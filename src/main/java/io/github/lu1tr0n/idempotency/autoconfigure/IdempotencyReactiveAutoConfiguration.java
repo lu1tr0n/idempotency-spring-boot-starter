@@ -1,6 +1,7 @@
 package io.github.lu1tr0n.idempotency.autoconfigure;
 
 import io.github.lu1tr0n.idempotency.core.IdempotencyStore;
+import io.github.lu1tr0n.idempotency.heartbeat.LockHeartbeat;
 import io.github.lu1tr0n.idempotency.principal.ReactiveIdempotencyPrincipalResolver;
 import io.github.lu1tr0n.idempotency.reactive.IdempotencyWebFilter;
 
@@ -51,8 +52,10 @@ public class IdempotencyReactiveAutoConfiguration {
     public IdempotencyWebFilter idempotencyWebFilter(
             IdempotencyStore store,
             IdempotencyProperties properties,
-            ObjectProvider<ReactiveIdempotencyPrincipalResolver> principalProvider) {
+            ObjectProvider<ReactiveIdempotencyPrincipalResolver> principalProvider,
+            ObjectProvider<LockHeartbeat> heartbeatProvider) {
         ReactiveIdempotencyPrincipalResolver principalResolver = principalProvider.getIfAvailable();
+        LockHeartbeat heartbeat = heartbeatProvider.getIfAvailable(() -> LockHeartbeat.NOOP);
         if (principalResolver == null
             && properties.getPrincipalBinding() == IdempotencyProperties.PrincipalBinding.REQUIRED) {
             throw new IllegalStateException(
@@ -67,6 +70,6 @@ public class IdempotencyReactiveAutoConfiguration {
                     + "is available; idempotency keys are NOT scoped to the principal. Put Spring Security on "
                     + "the classpath or define your own ReactiveIdempotencyPrincipalResolver bean.");
         }
-        return new IdempotencyWebFilter(store, properties, principalResolver);
+        return new IdempotencyWebFilter(store, properties, principalResolver, heartbeat);
     }
 }

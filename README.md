@@ -199,6 +199,25 @@ A consumer store can participate by implementing `io.github.lu1tr0n.idempotency.
 
 **Operational notes.** Keep `/actuator/health` off the public internet and prefer `management.endpoint.health.show-details=when-authorized`; on a store outage the `error` detail can include the backend host or relation name (same exposure as Spring's own `db` / `redis` indicators, and only rendered when details are shown). The default `cache-ttl=1s` bounds backend probes to roughly one per second regardless of how many probers poll; setting `cache-ttl=0` removes that bound, so leave it positive on a busy or exposed endpoint. The Redis probe fails as fast as the Redis client's command timeout (the JDBC probe has its own 2s query timeout). With `failure-strategy=fail-open`, the indicator stays `UP` (with `degraded: true`) while the idempotency guarantee is silently off — alert on the WARN log or the `idempotency` outcome metric, not on the health rollup.
 
+## Lock extension (heartbeat)
+
+By default a lock lives for `lock-timeout` (30s). A handler that runs *longer* than that lets its lock expire, and a concurrent retry can then steal it and run the operation a second time. The two clocks are independent — the short in-flight lock (`lock-timeout`) and the long completed-record TTL (`ttl`) — so set `lock-timeout` above your slowest protected handler and you avoid this entirely.
+
+When a handler's duration is unpredictable, opt into the heartbeat:
+
+```yaml
+spring:
+  idempotency:
+    lock-timeout: 30s
+    lock-extension:
+      enabled: true        # default false
+      interval: 10s        # optional; defaults to lock-timeout / 3
+```
+
+While the handler runs, a background daemon renews the lock every `interval` (sliding it forward by a full `lock-timeout`), so it only lapses if the owning process actually dies or loses the store. Renewal is token-checked and a no-op once the request completes. A single daemon thread services all in-flight renewals, so under very high concurrency of long-running handlers the heartbeat is best-effort — a renewal that misses its window degrades that key to plain `lock-timeout` expiry. In the unlikely event a renewal is leaked (the request's `finally` never runs), it self-terminates after `ttl`, so a leak blocks retries of that one key for at most the record TTL — never forever. Supported on the JDBC, Redis and in-memory stores; against a custom store that does not implement the extension contract the heartbeat is disabled with a startup warning rather than silently believed active.
+
+> **It narrows the duplicate-execution window — it does not close it.** The heartbeat only guarantees that a lock held by a *live, healthy, store-reachable* owner will not expire mid-handler. It is **not** an at-most-once guarantee. If the owning process suffers a stop-the-world pause (GC, container freeze) or loses connectivity to the store for longer than `lock-timeout`, the renewal cannot land, the lease lapses by design, a concurrent retry may steal the lock, and the handler may run twice. The library issues no fencing token to the downstream resource, so it cannot reject a write from a stale owner that resumes after its lease expired. For hard at-most-once side effects, make the side effect itself idempotent at the resource (unique constraint, conditional write) — which remains necessary with or without the heartbeat.
+
 ## Roadmap
 
 - **v0.0.1** — JDBC backend, servlet filter, payload validation, in-memory store for tests.
