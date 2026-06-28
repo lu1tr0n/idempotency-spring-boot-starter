@@ -218,6 +218,34 @@ While the handler runs, a background daemon renews the lock every `interval` (sl
 
 > **It narrows the duplicate-execution window — it does not close it.** The heartbeat only guarantees that a lock held by a *live, healthy, store-reachable* owner will not expire mid-handler. It is **not** an at-most-once guarantee. If the owning process suffers a stop-the-world pause (GC, container freeze) or loses connectivity to the store for longer than `lock-timeout`, the renewal cannot land, the lease lapses by design, a concurrent retry may steal the lock, and the handler may run twice. The library issues no fencing token to the downstream resource, so it cannot reject a write from a stale owner that resumes after its lease expired. For hard at-most-once side effects, make the side effect itself idempotent at the resource (unique constraint, conditional write) — which remains necessary with or without the heartbeat.
 
+## L1 cache (Caffeine)
+
+A hot key retried in a tight loop (mobile reconnects, client retry storms) hits the distributed store on every replay. An optional in-process **L1 cache** (Caffeine) sits in front of the JDBC / Redis **L2** store and serves those replays from local heap. Off by default; add Caffeine to the classpath and opt in:
+
+```yaml
+spring:
+  idempotency:
+    cache:
+      enabled: true          # opt-in; requires com.github.ben-manes.caffeine:caffeine
+      ttl: 2m                # L1 entry lifetime (working-set knob, not a correctness window)
+      maximum-weight: 64MB   # hard heap ceiling, enforced by a byte weigher (not entry count)
+      max-entry-size: 256KB  # records larger than this are served from L2, never cached in L1
+      record-stats: true     # publish hit/miss/eviction under idempotency.l1 when a MeterRegistry exists
+```
+
+```kotlin
+// build.gradle.kts — the cache requires Caffeine on the consumer classpath
+implementation("com.github.ben-manes.caffeine:caffeine")
+```
+
+**It only caches completed replays — never the lock.** The L1 holds immutable completed records (`findRecord` positives). The atomic lock acquisition that guarantees at-most-once is *never* served from L1; it always goes to the distributed store, so the cache cannot cause a second execution. Absent keys are never cached, and every L1 hit is re-validated against the record's own `expiresAt`, so a key reused with a different payload after its first record expired never replays a stale response. The result is byte-identical to an L2 replay — payload-mismatch (422) detection is unaffected.
+
+**Sizing is by bytes, not entry count.** A record holds the full response body (up to `max-response-size`, default 1MB), so a count-based cap would be a memory trap (10k entries × 1MB = 10GB). The cache is bounded by `maximum-weight` over body + header bytes, plus a fixed per-entry floor so even tiny/empty responses cannot flood the heap; `max-entry-size` keeps large bodies out of the working set entirely.
+
+`cache.ttl` is a memory/working-set knob — keep it short (default 2m). It is **not** a correctness window: the record's own `ttl` (default 24h) still governs replay validity via the read-time expiry check. Do not set `cache.ttl` to the record `ttl`, or every completed response would be pinned in heap for a day. Wrapping the in-memory backend is a no-op (logged at `INFO`) — an L1 in front of an in-process map adds nothing.
+
+> **Data residency.** An enabled L1 keeps full response bodies and headers (which may include `Set-Cookie`, bearer tokens or PII) resident in process heap for `cache.ttl` — strictly shorter and smaller than the L2 store, which already persists the same surface for the record `ttl`. For endpoints handling regulated data, use a shorter `cache.ttl` or leave the L1 off.
+
 ## Roadmap
 
 - **v0.0.1** — JDBC backend, servlet filter, payload validation, in-memory store for tests.
@@ -234,8 +262,8 @@ While the handler runs, a background daemon renews the lock every `interval` (sl
   - Flyway / Liquibase migration scripts (PostgreSQL)
 - **v0.0.5 (current)** — Operability:
   - Spring Boot Actuator health indicator (store reachability + table existence; severity tracks `failure-strategy`) ✓
-  - Two-clock TTL (separate in-progress lock TTL vs response record TTL — AWS Powertools pattern)
-  - L1 + L2 cache layering (Caffeine in front of Redis/JDBC for hot keys)
+  - Lock-extension heartbeat (renew a long-running handler's lock so a concurrent retry can't steal it) ✓
+  - L1 + L2 cache layering (optional Caffeine cache in front of Redis/JDBC for hot-key replays) ✓
   - Per-response TTL override header (`X-Idempotency-Persist-For-Seconds`)
 - **v0.0.6** — Extensibility: public `IdempotencyStore` SPI + multi-module layout (`idempotency-core` + `idempotency-store-{jdbc,redis,memory,…}`) so third parties can ship DynamoDB / MongoDB / Cosmos DB / etc. backends.
 - **v0.1.0** — First GA release; surface frozen; benchmarks; sample app; docs site.

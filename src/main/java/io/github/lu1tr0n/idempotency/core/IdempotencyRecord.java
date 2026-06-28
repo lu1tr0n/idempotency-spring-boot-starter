@@ -54,6 +54,13 @@ public final class IdempotencyRecord {
     public Map<String, List<String>> headers() { return headers; }
     /** Returns a defensive copy — never mutate the returned array. */
     public byte[] body() { return body.clone(); }
+    /**
+     * Length of the response body in bytes, without the defensive copy that
+     * {@link #body()} makes. Used by the optional L1 cache weigher to size an
+     * entry (which can hold a multi-KB body) without cloning a possibly large
+     * array just to measure it.
+     */
+    public int bodyLength() { return body.length; }
     public String contentType() { return contentType; }
     public String payloadHash() { return payloadHash; }
     public Instant createdAt() { return createdAt; }

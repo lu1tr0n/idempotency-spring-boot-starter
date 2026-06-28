@@ -101,6 +101,9 @@ public class IdempotencyProperties {
     /** Lock-extension (heartbeat) configuration. */
     private final LockExtension lockExtension = new LockExtension();
 
+    /** Optional in-process L1 cache (Caffeine) in front of the distributed store. */
+    private final Cache cache = new Cache();
+
     /** JDBC-specific configuration. */
     private final Jdbc jdbc = new Jdbc();
 
@@ -257,6 +260,7 @@ public class IdempotencyProperties {
     public Observations getObservations() { return observations; }
     public Health getHealth() { return health; }
     public LockExtension getLockExtension() { return lockExtension; }
+    public Cache getCache() { return cache; }
     public Jdbc getJdbc() { return jdbc; }
     public Redis getRedis() { return redis; }
     public boolean isCache5xx() { return cache5xx; }
@@ -394,6 +398,82 @@ public class IdempotencyProperties {
         public void setEnabled(boolean enabled) { this.enabled = enabled; }
         public Duration getInterval() { return interval; }
         public void setInterval(Duration interval) { this.interval = interval; }
+    }
+
+    /**
+     * Optional in-process L1 cache (Caffeine) knobs. When {@code enabled} <em>and</em>
+     * Caffeine is on the classpath, the selected distributed store (JDBC/Redis)
+     * is wrapped so completed-record replays are served from local heap instead
+     * of a round trip. It caches only immutable completed records — never the
+     * atomic lock — so the at-most-once guarantee is preserved (see
+     * {@code CachingIdempotencyStore}). Off by default, and ignored (with an INFO
+     * log) when the backend is in-memory, where an L1 in front of an in-process
+     * map is pure overhead.
+     *
+     * <p><strong>Data residency:</strong> an enabled L1 keeps full response
+     * bodies and headers (which may include {@code Set-Cookie}, bearer tokens or
+     * PII) resident in process heap for {@link #ttl}. This is strictly shorter and
+     * smaller than the L2 store, which already persists the same surface for the
+     * record {@code ttl} (default 24h) — but for endpoints handling regulated data
+     * consider a shorter {@link #ttl}, or leaving the L1 off, as an informed
+     * choice.
+     */
+    public static class Cache {
+        /**
+         * Master switch. Default {@code false}. Requires Caffeine on the classpath
+         * — left off, or with Caffeine absent, the store is used directly. Caffeine
+         * is a common <em>transitive</em> dependency, so activation is explicit
+         * opt-in rather than classpath-triggered, to never silently put an L1 in
+         * front of a correctness primitive.
+         */
+        private boolean enabled = false;
+
+        /**
+         * L1 entry lifetime ({@code expireAfterWrite}). A memory/working-set knob,
+         * <strong>not</strong> a correctness window: the record's own
+         * {@code expiresAt} is re-checked on every hit regardless. Kept short
+         * (default {@code 2m}) because replay storms cluster within seconds-to
+         * -minutes; do <em>not</em> raise it to the record {@code ttl} (24h) or
+         * every completed response would be pinned in heap for a day. Must be
+         * positive — Caffeine rejects a non-positive {@code expireAfterWrite} and
+         * the context fails fast at startup.
+         */
+        private Duration ttl = Duration.ofMinutes(2);
+
+        /**
+         * Hard heap ceiling for the L1, enforced by a byte {@code weigher} over
+         * the response body + headers — <strong>not</strong> an entry count.
+         * Count-bounding is a trap: one record can hold a 1 MB body, so a
+         * 10k-entry cap could be 10 GB. Default {@code 64MB}.
+         */
+        private DataSize maximumWeight = DataSize.ofMegabytes(64);
+
+        /**
+         * Records whose estimated weight exceeds this are served from the L2 store
+         * but never populated into L1, so a few large bodies cannot dominate (and
+         * thrash) the working set. Default {@code 256KB}; keep it well below
+         * {@code max-response-size}.
+         */
+        private DataSize maxEntrySize = DataSize.ofKilobytes(256);
+
+        /**
+         * Whether the cache records hit/miss/eviction statistics. Default
+         * {@code true} (a few atomic increments); when a {@code MeterRegistry} is
+         * present they are published under {@code idempotency.l1} so operators can
+         * see the hit ratio the L1 earns. Set {@code false} to disable entirely.
+         */
+        private boolean recordStats = true;
+
+        public boolean isEnabled() { return enabled; }
+        public void setEnabled(boolean enabled) { this.enabled = enabled; }
+        public Duration getTtl() { return ttl; }
+        public void setTtl(Duration ttl) { this.ttl = ttl; }
+        public DataSize getMaximumWeight() { return maximumWeight; }
+        public void setMaximumWeight(DataSize maximumWeight) { this.maximumWeight = maximumWeight; }
+        public DataSize getMaxEntrySize() { return maxEntrySize; }
+        public void setMaxEntrySize(DataSize maxEntrySize) { this.maxEntrySize = maxEntrySize; }
+        public boolean isRecordStats() { return recordStats; }
+        public void setRecordStats(boolean recordStats) { this.recordStats = recordStats; }
     }
 
     /** JDBC-specific knobs. */

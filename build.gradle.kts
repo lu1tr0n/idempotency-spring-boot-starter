@@ -95,6 +95,14 @@ dependencies {
     compileOnly("org.springframework.boot:spring-boot-actuator")
     compileOnly("org.springframework.boot:spring-boot-actuator-autoconfigure")
 
+    // Optional L1 cache — Caffeine for the in-process cache, micrometer-core for
+    // the optional CaffeineCacheMetrics binder. compileOnly + @ConditionalOnClass
+    // + explicit spring.idempotency.cache.enabled opt-in: an app without Caffeine
+    // (or that leaves the cache off) is completely unaffected, and Caffeine being
+    // a common transitive dependency never silently wraps the store.
+    compileOnly("com.github.ben-manes.caffeine:caffeine")
+    compileOnly("io.micrometer:micrometer-core")
+
     // Generates additional-spring-configuration-metadata.json so IDEs
     // (IntelliJ, VS Code) can autocomplete our properties in application.yml.
     annotationProcessor("org.springframework.boot:spring-boot-configuration-processor")
@@ -111,6 +119,7 @@ dependencies {
     testImplementation("org.springframework.boot:spring-boot-starter-data-redis")
     testImplementation("org.springframework.boot:spring-boot-starter-jdbc")
     testImplementation("io.micrometer:micrometer-observation-test") // TestObservationRegistry
+    testImplementation("com.github.ben-manes.caffeine:caffeine")    // L1 cache decorator tests
     testImplementation("org.springframework.boot:spring-boot-starter-actuator") // health-indicator integration tests
     testImplementation("org.flywaydb:flyway-core")                  // apply the shipped Flyway script in tests
     testImplementation("org.flywaydb:flyway-database-postgresql")   // Flyway 10+ Postgres support module

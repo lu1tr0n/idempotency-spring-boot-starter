@@ -5,3 +5,4 @@ io.github.lu1tr0n.idempotency.autoconfigure.IdempotencyReactiveAutoConfiguration
 io.github.lu1tr0n.idempotency.autoconfigure.InMemoryStoreAutoConfiguration
 io.github.lu1tr0n.idempotency.autoconfigure.JdbcStoreAutoConfiguration
 io.github.lu1tr0n.idempotency.autoconfigure.RedisStoreAutoConfiguration
+io.github.lu1tr0n.idempotency.autoconfigure.CachingStoreAutoConfiguration

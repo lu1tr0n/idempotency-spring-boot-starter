@@ -127,6 +127,29 @@ class IdempotencyStoreHealthIndicatorTest {
     }
 
     @Test
+    void cacheDecoratedStore_isUnwrapped_soHealthAndLabelSurviveWrapping() {
+        // Wrapping the JDBC/Redis store in the L1 cache decorator must NOT drop
+        // health to UNKNOWN: the decorator does not implement IdempotencyStoreHealth,
+        // so the indicator unwraps to the concrete store to find its probe.
+        var delegate = new CountingStore(); // implements IdempotencyStoreHealth
+        var cache = com.github.benmanes.caffeine.cache.Caffeine.newBuilder()
+            .<String, IdempotencyRecord>weigher((k, r) ->
+                io.github.lu1tr0n.idempotency.store.cache.CacheEntryWeights.weigh(r))
+            .maximumWeight(1024)
+            .build();
+        var decorated = new io.github.lu1tr0n.idempotency.store.cache.CachingIdempotencyStore(delegate, cache, 1024);
+
+        var indicator = new IdempotencyStoreHealthIndicator(
+            decorated, props(IdempotencyProperties.FailureStrategy.FAIL_CLOSED, Duration.ZERO));
+
+        Health health = indicator.health();
+
+        assertThat(health.getStatus()).isEqualTo(Status.UP); // probe ran via unwrap
+        assertThat(health.getDetails()).containsEntry("backend", "custom");
+        assertThat(delegate.probes.get()).isEqualTo(1);       // the real store was probed
+    }
+
+    @Test
     void redisBackend_labelledRedis_onDegradedProbe() {
         StringRedisTemplate template = mock(StringRedisTemplate.class);
         when(template.execute(any(org.springframework.data.redis.core.RedisCallback.class)))

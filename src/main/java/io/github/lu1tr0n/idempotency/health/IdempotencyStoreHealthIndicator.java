@@ -2,6 +2,7 @@ package io.github.lu1tr0n.idempotency.health;
 
 import io.github.lu1tr0n.idempotency.autoconfigure.IdempotencyProperties;
 import io.github.lu1tr0n.idempotency.autoconfigure.IdempotencyProperties.FailureStrategy;
+import io.github.lu1tr0n.idempotency.core.DelegatingIdempotencyStore;
 import io.github.lu1tr0n.idempotency.core.IdempotencyStore;
 import io.github.lu1tr0n.idempotency.core.IdempotencyStoreHealth;
 
@@ -71,7 +72,11 @@ public class IdempotencyStoreHealthIndicator implements HealthIndicator {
     private volatile Snapshot cached;
 
     public IdempotencyStoreHealthIndicator(IdempotencyStore store, IdempotencyProperties properties) {
-        this.store = store;
+        // Unwrap any decorator (e.g. the optional L1 cache) to the concrete store,
+        // so the capability probe and backend label reflect the real backend. A
+        // decorator does not implement IdempotencyStoreHealth — without unwrapping,
+        // wrapping JDBC would silently drop the probe to UNKNOWN.
+        this.store = DelegatingIdempotencyStore.unwrap(store);
         this.properties = properties;
         Duration ttl = properties.getHealth().getCacheTtl();
         this.cacheTtlNanos = ttl == null ? 0L : Math.max(0L, ttl.toNanos());
