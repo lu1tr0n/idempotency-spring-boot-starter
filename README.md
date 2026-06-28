@@ -24,14 +24,14 @@ This starter does all of that with two lines of config.
 | Response replay | body + type name only | **status + headers + body + content-type** |
 | Stripe-style payload mismatch | no | **yes (returns 422)** |
 | Concurrent lock contention | 409 or WAIT | 409 with `Retry-After` |
-| WebFlux | no | planned for v0.0.2 |
+| WebFlux | no | **yes (reactive filter)** |
 
 ## Quick start
 
 ```kotlin
 // build.gradle.kts
 dependencies {
-    implementation("io.github.lu1tr0n:idempotency-spring-boot-starter:0.0.1")
+    implementation("io.github.lu1tr0n:idempotency-spring-boot-starter:0.0.4")
 }
 ```
 
@@ -252,7 +252,7 @@ implementation("com.github.ben-manes.caffeine:caffeine")
 - **v0.0.2** — Redis backend, configurable 5xx-cache toggle, Testcontainers integration tests for Postgres + Redis, GitHub Packages mirror publish.
 - **v0.0.2.1** — critical fixes: filter wiring on JDBC/Redis backends, 4xx response body replay, per-platform JDBC schema (Postgres/H2), TTL-expired record steal, in-memory auto-config, `default-ttl` alias.
 - **v0.0.3** — `@Idempotent` annotation AOP wiring, WebFlux filter, async / `Mono` / `CompletableFuture` support.
-- **v0.0.4 (current)** — Security & standards hardening:
+- **v0.0.4 (released)** — Security & standards hardening:
   - RFC 8941 sf-string parsing (strip surrounding quotes — forward-compat with IETF draft -08+)
   - Composite key with authenticated principal (IETF draft §5 data-leak mitigation)
   - `@RequireIdempotencyKey` — enforce the key on selected endpoints (IETF §2.7 missing-key → 400)
@@ -260,7 +260,7 @@ implementation("com.github.ben-manes.caffeine:caffeine")
   - Configurable non-cacheable response statuses (release the lock so a corrected retry reuses the key)
   - Distributed tracing / metrics via Micrometer Observation (per-outcome span + counter; OpenTelemetry / Brave; servlet)
   - Flyway / Liquibase migration scripts (PostgreSQL)
-- **v0.0.5 (current)** — Operability:
+- **v0.0.5 (in progress)** — Operability:
   - Spring Boot Actuator health indicator (store reachability + table existence; severity tracks `failure-strategy`) ✓
   - Lock-extension heartbeat (renew a long-running handler's lock so a concurrent retry can't steal it) ✓
   - L1 + L2 cache layering (optional Caffeine cache in front of Redis/JDBC for hot-key replays) ✓
