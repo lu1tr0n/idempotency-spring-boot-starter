@@ -64,10 +64,17 @@ public class IdempotencyAutoConfiguration {
     }
 
     /**
-     * Installs the global servlet filter when Spring Web is on the classpath
-     * AND a {@link IdempotencyStore} bean is available. The store bean comes
-     * from {@link JdbcStoreAutoConfiguration}, a future Redis auto-config, or
+     * Installs the global servlet filter in a SERVLET web application when a
+     * {@link IdempotencyStore} bean is available. The store bean comes from
+     * {@link JdbcStoreAutoConfiguration}, a future Redis auto-config, or
      * user-provided code (typically {@code InMemoryIdempotencyStore} in tests).
+     *
+     * <p>{@code @ConditionalOnWebApplication(type = SERVLET)} keeps this filter
+     * out of a reactive context: an app with both web stacks on the classpath
+     * (or one forced to {@code reactive}) would otherwise instantiate this
+     * servlet filter too, and with {@code principal-binding=required} its
+     * constructor throws — failing a reactive app's startup. The reactive twin
+     * is {@code REACTIVE}-gated symmetrically.
      *
      * <p>The {@code @ConditionalOnBean} lives on the {@code @Bean} method
      * rather than on a nested {@code @Configuration} class because the latter
@@ -77,6 +84,7 @@ public class IdempotencyAutoConfiguration {
      * variant defers evaluation until the full bean definition graph is known.
      */
     @Bean
+    @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
     @ConditionalOnClass({HttpServletRequest.class, org.springframework.web.filter.OncePerRequestFilter.class})
     @ConditionalOnBean(IdempotencyStore.class)
     @ConditionalOnMissingBean

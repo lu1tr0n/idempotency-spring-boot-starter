@@ -10,6 +10,7 @@ import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.web.server.WebFilter;
@@ -22,12 +23,24 @@ import org.springframework.web.server.WebFilter;
  * <p>Loads AFTER the backend autoconfigs so the
  * {@code @ConditionalOnBean(IdempotencyStore.class)} guard finds an already
  * registered store (lab finding #6/#7).
+ *
+ * <p><strong>Activation is gated on a REACTIVE web application</strong>, not on
+ * {@code @ConditionalOnClass(WebFilter.class)} alone. {@code WebFilter} lives in
+ * {@code spring-web}, which is present in <em>every</em> servlet app too, so a
+ * class-only guard would match a servlet-only app and then fail to instantiate
+ * {@link IdempotencyWebFilter} (it references reactor, absent on a servlet
+ * classpath) — {@code NoClassDefFoundError} at startup. {@code type=REACTIVE}
+ * is a filtering condition resolved from the web-application type before this
+ * configuration class is processed, so a servlet/non-web app backs off without
+ * loading the reactor-referencing filter. Mirrors the servlet filter, which is
+ * {@code SERVLET}-gated.
  */
 @AutoConfiguration(after = {
     InMemoryStoreAutoConfiguration.class,
     JdbcStoreAutoConfiguration.class,
     RedisStoreAutoConfiguration.class
 })
+@ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.REACTIVE)
 @ConditionalOnClass(WebFilter.class)
 @EnableConfigurationProperties(IdempotencyProperties.class)
 public class IdempotencyReactiveAutoConfiguration {
