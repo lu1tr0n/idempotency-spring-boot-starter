@@ -53,8 +53,10 @@ import static org.assertj.core.api.Assertions.assertThat;
         "spring.autoconfigure.exclude="
             + "org.springframework.boot.autoconfigure.security.servlet.SecurityAutoConfiguration,"
             + "org.springframework.boot.autoconfigure.security.servlet.UserDetailsServiceAutoConfiguration,"
+            + "org.springframework.boot.actuate.autoconfigure.security.servlet.ManagementWebSecurityAutoConfiguration,"
             + "org.springframework.boot.autoconfigure.security.reactive.ReactiveSecurityAutoConfiguration,"
-            + "org.springframework.boot.autoconfigure.security.reactive.ReactiveUserDetailsServiceAutoConfiguration"
+            + "org.springframework.boot.autoconfigure.security.reactive.ReactiveUserDetailsServiceAutoConfiguration,"
+            + "org.springframework.boot.actuate.autoconfigure.security.reactive.ReactiveManagementWebSecurityAutoConfiguration"
     }
 )
 class IdempotentAnnotationIntegrationTest {

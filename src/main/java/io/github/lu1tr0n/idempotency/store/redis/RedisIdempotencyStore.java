@@ -3,8 +3,10 @@ package io.github.lu1tr0n.idempotency.store.redis;
 import io.github.lu1tr0n.idempotency.core.IdempotencyKey;
 import io.github.lu1tr0n.idempotency.core.IdempotencyRecord;
 import io.github.lu1tr0n.idempotency.core.IdempotencyStore;
+import io.github.lu1tr0n.idempotency.core.IdempotencyStoreHealth;
 
 import org.springframework.dao.DataAccessException;
+import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.data.redis.core.script.RedisScript;
@@ -55,7 +57,7 @@ import java.util.concurrent.TimeUnit;
  * for double-quote and backslash, which covers every byte allowed in
  * HTTP/1.1 RFC 7230 §3.2.6.
  */
-public class RedisIdempotencyStore implements IdempotencyStore {
+public class RedisIdempotencyStore implements IdempotencyStore, IdempotencyStoreHealth {
 
     /**
      * Atomic save: verify the lock token, write the record with TTL, delete
@@ -101,6 +103,18 @@ public class RedisIdempotencyStore implements IdempotencyStore {
         if (!normalised.endsWith(":")) normalised = normalised + ":";
         this.lockPrefix = normalised + "lock:";
         this.recordPrefix = normalised + "rec:";
+    }
+
+    /**
+     * Health probe: a single {@code PING}, borrowing and releasing a connection
+     * from the configured pool via the template (so it never leaks one). PING
+     * confirms reachability; it does not verify write-ability (a read replica or
+     * an OOM {@code MISCONF} stop-writes still PONGs), which is a deliberate
+     * trade-off to keep the probe side-effect-free on the health interval.
+     */
+    @Override
+    public void verify() {
+        redis.execute((RedisCallback<String>) connection -> connection.ping());
     }
 
     @Override

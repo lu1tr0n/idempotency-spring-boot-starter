@@ -167,6 +167,38 @@ public void health() { ... }
 
 `spring.idempotency.non-cacheable-statuses` (default empty) — handler response statuses that are *not* saved as the idempotency record; the lock is released so the same key is reusable on a corrected retry. A sensible opt-in set is `400,401,403,429` (the operation never committed). Leave committed outcomes (`402`/`404`/`409`/`422`) out so they keep replaying. Note: unlike Stripe — which caches executed errors and expects a fresh key — a released key carries no stored payload hash, so a corrected retry may use a different body.
 
+## Actuator health
+
+When Spring Boot Actuator is on the classpath, the starter contributes an `idempotency` health indicator that probes the configured store — for the JDBC backend a `SELECT 1 FROM <table> WHERE 1 = 0`, which also confirms the **idempotency table exists** (catching the "migration never ran" case a plain `db` indicator misses); for Redis a `PING`. It exposes only low-cardinality details (`backend`, `failureStrategy`) — never keys, principals, table names, or row counts.
+
+Severity tracks `failure-strategy`, so health never manufactures an outage:
+
+| store probe | `failure-strategy` | status |
+|---|---|---|
+| ok | any | `UP` |
+| fails | `fail-closed` | `DOWN` (the app truly refuses keyed mutations) |
+| fails | `fail-open` | `UP` + `degraded: true` (the app still serves; failure logged at `WARN`) |
+| no probe (custom store) | any | `UNKNOWN` + `probe: unsupported` |
+
+The indicator is **not** in the readiness group and never in liveness — a shared-store outage must not depool the whole fleet or kill pods. Opt in deliberately if you want store outage to gate traffic:
+
+```yaml
+management:
+  endpoint:
+    health:
+      group:
+        readiness:
+          include: readinessState, idempotency
+```
+
+A consumer store can participate by implementing `io.github.lu1tr0n.idempotency.core.IdempotencyStoreHealth` (a single `verify()` method, no Actuator dependency).
+
+`spring.idempotency.health.cache-ttl` (default `1s`) — how long a probe result is cached before the store is re-probed, so several probers (Kubernetes, load balancer, Prometheus) hitting `/actuator/health` cost at most one backend probe per interval and flapping is damped. Set to `0` to probe on every call.
+
+`management.health.idempotency.enabled` (default `true`) — the standard Actuator switch to disable the indicator entirely.
+
+**Operational notes.** Keep `/actuator/health` off the public internet and prefer `management.endpoint.health.show-details=when-authorized`; on a store outage the `error` detail can include the backend host or relation name (same exposure as Spring's own `db` / `redis` indicators, and only rendered when details are shown). The default `cache-ttl=1s` bounds backend probes to roughly one per second regardless of how many probers poll; setting `cache-ttl=0` removes that bound, so leave it positive on a busy or exposed endpoint. The Redis probe fails as fast as the Redis client's command timeout (the JDBC probe has its own 2s query timeout). With `failure-strategy=fail-open`, the indicator stays `UP` (with `degraded: true`) while the idempotency guarantee is silently off — alert on the WARN log or the `idempotency` outcome metric, not on the health rollup.
+
 ## Roadmap
 
 - **v0.0.1** — JDBC backend, servlet filter, payload validation, in-memory store for tests.
@@ -181,8 +213,8 @@ public void health() { ... }
   - Configurable non-cacheable response statuses (release the lock so a corrected retry reuses the key)
   - Distributed tracing / metrics via Micrometer Observation (per-outcome span + counter; OpenTelemetry / Brave; servlet)
   - Flyway / Liquibase migration scripts (PostgreSQL)
-- **v0.0.5** — Operability:
-  - Micrometer metrics + Spring Boot Actuator health indicator
+- **v0.0.5 (current)** — Operability:
+  - Spring Boot Actuator health indicator (store reachability + table existence; severity tracks `failure-strategy`) ✓
   - Two-clock TTL (separate in-progress lock TTL vs response record TTL — AWS Powertools pattern)
   - L1 + L2 cache layering (Caffeine in front of Redis/JDBC for hot keys)
   - Per-response TTL override header (`X-Idempotency-Persist-For-Seconds`)

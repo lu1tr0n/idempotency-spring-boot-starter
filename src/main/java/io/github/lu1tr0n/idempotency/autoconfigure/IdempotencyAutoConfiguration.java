@@ -3,6 +3,7 @@ package io.github.lu1tr0n.idempotency.autoconfigure;
 import io.github.lu1tr0n.idempotency.core.HeaderIdempotencyKeyResolver;
 import io.github.lu1tr0n.idempotency.core.IdempotencyKeyResolver;
 import io.github.lu1tr0n.idempotency.core.IdempotencyStore;
+import io.github.lu1tr0n.idempotency.health.IdempotencyStoreHealthIndicator;
 import io.github.lu1tr0n.idempotency.observability.IdempotencyObservations;
 import io.github.lu1tr0n.idempotency.principal.IdempotencyPrincipalResolver;
 import io.github.lu1tr0n.idempotency.principal.PrincipalScopingKeyResolver;
@@ -12,6 +13,9 @@ import io.github.lu1tr0n.idempotency.servlet.RequireIdempotencyKeyInterceptor;
 import io.micrometer.observation.ObservationRegistry;
 
 import jakarta.servlet.http.HttpServletRequest;
+
+import org.springframework.boot.actuate.autoconfigure.health.ConditionalOnEnabledHealthIndicator;
+import org.springframework.boot.actuate.health.HealthIndicator;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -182,6 +186,41 @@ public class IdempotencyAutoConfiguration {
                                                         IdempotencyProperties properties) {
             ObservationRegistry registry = registryProvider.getIfAvailable(() -> ObservationRegistry.NOOP);
             return new IdempotencyObservations(registry, properties.getObservations().isEnabled());
+        }
+    }
+
+    /**
+     * Registers the {@code idempotency} Actuator health indicator when Spring
+     * Boot Actuator is on the classpath and the consumer has not disabled it via
+     * {@code management.health.idempotency.enabled=false}.
+     *
+     * <p>The store is resolved through an {@link ObjectProvider} rather than a
+     * {@code @ConditionalOnBean(IdempotencyStore.class)}. {@code idempotencyFilter}
+     * above can use {@code @ConditionalOnBean} because it is a {@code @Bean} on the
+     * outer {@code @AutoConfiguration}, which carries
+     * {@code after = {…StoreAutoConfiguration}} — so the store bean definition is
+     * guaranteed present when its condition runs. This indicator lives in a plain
+     * nested {@code @Configuration} that does not inherit that ordering, so a
+     * {@code @ConditionalOnBean} here evaluates before the store auto-configs have
+     * contributed their definitions and would consistently miss the store. The
+     * provider sidesteps the ordering entirely: it resolves lazily at
+     * bean-creation time, after the full definition graph is known — yielding
+     * {@code null} (no indicator) only when there genuinely is no store to probe.
+     */
+    @Configuration(proxyBeanMethods = false)
+    @ConditionalOnClass(HealthIndicator.class)
+    @ConditionalOnEnabledHealthIndicator("idempotency")
+    static class IdempotencyHealthConfiguration {
+
+        @Bean
+        @ConditionalOnMissingBean(name = "idempotencyHealthIndicator")
+        IdempotencyStoreHealthIndicator idempotencyHealthIndicator(ObjectProvider<IdempotencyStore> storeProvider,
+                                                                   IdempotencyProperties properties) {
+            IdempotencyStore store = storeProvider.getIfAvailable();
+            if (store == null) {
+                return null; // no store configured → nothing to probe, no indicator
+            }
+            return new IdempotencyStoreHealthIndicator(store, properties);
         }
     }
 }

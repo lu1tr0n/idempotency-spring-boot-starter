@@ -86,6 +86,15 @@ dependencies {
     // declare it first-class to make the dependency intentional.)
     compileOnly("io.micrometer:micrometer-observation")
 
+    // Actuator health indicator — optional. spring-boot-actuator carries
+    // HealthIndicator/Health; spring-boot-actuator-autoconfigure carries
+    // @ConditionalOnEnabledHealthIndicator. compileOnly + @ConditionalOnClass
+    // gating so an app without Actuator is completely unaffected (nothing in
+    // core/store references Actuator; only the guarded nested config + the
+    // indicator do).
+    compileOnly("org.springframework.boot:spring-boot-actuator")
+    compileOnly("org.springframework.boot:spring-boot-actuator-autoconfigure")
+
     // Generates additional-spring-configuration-metadata.json so IDEs
     // (IntelliJ, VS Code) can autocomplete our properties in application.yml.
     annotationProcessor("org.springframework.boot:spring-boot-configuration-processor")
@@ -102,6 +111,7 @@ dependencies {
     testImplementation("org.springframework.boot:spring-boot-starter-data-redis")
     testImplementation("org.springframework.boot:spring-boot-starter-jdbc")
     testImplementation("io.micrometer:micrometer-observation-test") // TestObservationRegistry
+    testImplementation("org.springframework.boot:spring-boot-starter-actuator") // health-indicator integration tests
     testImplementation("org.flywaydb:flyway-core")                  // apply the shipped Flyway script in tests
     testImplementation("org.flywaydb:flyway-database-postgresql")   // Flyway 10+ Postgres support module
     testImplementation("org.liquibase:liquibase-core")              // apply the shipped Liquibase changelog in tests

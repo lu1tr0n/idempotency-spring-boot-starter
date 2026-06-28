@@ -36,7 +36,8 @@ import java.util.Optional;
         "spring.main.web-application-type=reactive",
         "spring.autoconfigure.exclude="
             + "org.springframework.boot.autoconfigure.security.reactive.ReactiveSecurityAutoConfiguration,"
-            + "org.springframework.boot.autoconfigure.security.reactive.ReactiveUserDetailsServiceAutoConfiguration"
+            + "org.springframework.boot.autoconfigure.security.reactive.ReactiveUserDetailsServiceAutoConfiguration,"
+            + "org.springframework.boot.actuate.autoconfigure.security.reactive.ReactiveManagementWebSecurityAutoConfiguration"
     })
 class ReactiveStoreFailClosedTest {
 

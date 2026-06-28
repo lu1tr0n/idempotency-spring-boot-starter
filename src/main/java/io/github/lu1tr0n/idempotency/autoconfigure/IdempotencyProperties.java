@@ -95,6 +95,9 @@ public class IdempotencyProperties {
     /** Observation (tracing + metrics) configuration. */
     private final Observations observations = new Observations();
 
+    /** Actuator health-indicator configuration. */
+    private final Health health = new Health();
+
     /** JDBC-specific configuration. */
     private final Jdbc jdbc = new Jdbc();
 
@@ -249,6 +252,7 @@ public class IdempotencyProperties {
     public PayloadValidation getPayloadValidation() { return payloadValidation; }
     public void setPayloadValidation(PayloadValidation pv) { this.payloadValidation = pv; }
     public Observations getObservations() { return observations; }
+    public Health getHealth() { return health; }
     public Jdbc getJdbc() { return jdbc; }
     public Redis getRedis() { return redis; }
     public boolean isCache5xx() { return cache5xx; }
@@ -332,6 +336,26 @@ public class IdempotencyProperties {
 
         public boolean isEnabled() { return enabled; }
         public void setEnabled(boolean enabled) { this.enabled = enabled; }
+    }
+
+    /**
+     * Actuator health-indicator knobs. The indicator only registers when Spring
+     * Boot Actuator is on the classpath and
+     * {@code management.health.idempotency.enabled} is not {@code false} (the
+     * standard Actuator switch); these settings tune its behaviour once active.
+     */
+    public static class Health {
+        /**
+         * How long a probe result is cached before the store is re-probed. The
+         * health endpoint is polled by several probers (Kubernetes, load
+         * balancer, Prometheus) on a short interval; caching bounds backend hits
+         * to one per interval and damps flapping. Default {@code 1s}. Set to
+         * {@code 0} (or negative) to probe on every call.
+         */
+        private Duration cacheTtl = Duration.ofSeconds(1);
+
+        public Duration getCacheTtl() { return cacheTtl; }
+        public void setCacheTtl(Duration cacheTtl) { this.cacheTtl = cacheTtl; }
     }
 
     /** JDBC-specific knobs. */

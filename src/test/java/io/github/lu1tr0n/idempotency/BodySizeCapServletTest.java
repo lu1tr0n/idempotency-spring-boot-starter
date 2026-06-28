@@ -33,7 +33,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "spring.idempotency.max-body-size=64B",
         "spring.autoconfigure.exclude="
             + "org.springframework.boot.autoconfigure.security.servlet.SecurityAutoConfiguration,"
-            + "org.springframework.boot.autoconfigure.security.servlet.UserDetailsServiceAutoConfiguration"
+            + "org.springframework.boot.autoconfigure.security.servlet.UserDetailsServiceAutoConfiguration,"
+            + "org.springframework.boot.actuate.autoconfigure.security.servlet.ManagementWebSecurityAutoConfiguration"
     })
 @AutoConfigureMockMvc
 class BodySizeCapServletTest {

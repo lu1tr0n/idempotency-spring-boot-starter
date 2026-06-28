@@ -3,10 +3,12 @@ package io.github.lu1tr0n.idempotency.store.jdbc;
 import io.github.lu1tr0n.idempotency.core.IdempotencyKey;
 import io.github.lu1tr0n.idempotency.core.IdempotencyRecord;
 import io.github.lu1tr0n.idempotency.core.IdempotencyStore;
+import io.github.lu1tr0n.idempotency.core.IdempotencyStoreHealth;
 
 import org.springframework.dao.DataAccessException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.ResultSetExtractor;
 
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -51,7 +53,14 @@ import java.util.UUID;
  * for the server (held connection). The 409 path with a {@code Retry-After}
  * lets the client decide how long to wait.
  */
-public class JdbcIdempotencyStore implements IdempotencyStore {
+public class JdbcIdempotencyStore implements IdempotencyStore, IdempotencyStoreHealth {
+
+    /**
+     * Seconds the health probe waits before giving up on a hung connection.
+     * Short on purpose — a health check must fail fast and degrade the probe
+     * rather than block the Actuator thread.
+     */
+    private static final int HEALTH_PROBE_TIMEOUT_SECONDS = 2;
 
     private final JdbcTemplate jdbc;
     private final String tableName;
@@ -82,6 +91,27 @@ public class JdbcIdempotencyStore implements IdempotencyStore {
             }
         }
         return name;
+    }
+
+    /**
+     * Health probe: {@code SELECT 1 FROM <table> WHERE 1 = 0}. The relation is
+     * resolved during parse/analyze before the constant predicate is folded, so
+     * a missing idempotency table still raises an exception (catching the
+     * unrun-migration case), while {@code 1 = 0} returns no rows — no scan, no
+     * data, no volume leak. The table name is the same already-validated
+     * identifier interpolated everywhere else in this class (bind parameters
+     * cannot carry identifiers). Bounded by a short query timeout so a hung
+     * connection fails the probe instead of the Actuator thread.
+     */
+    @Override
+    public void verify() {
+        jdbc.query(
+            con -> {
+                var ps = con.prepareStatement("SELECT 1 FROM " + tableName + " WHERE 1 = 0");
+                ps.setQueryTimeout(HEALTH_PROBE_TIMEOUT_SECONDS);
+                return ps;
+            },
+            (ResultSetExtractor<Void>) rs -> null);
     }
 
     @Override

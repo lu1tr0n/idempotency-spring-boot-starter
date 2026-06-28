@@ -56,7 +56,8 @@ import static org.assertj.core.api.Assertions.assertThat;
         "spring.idempotency.max-body-size=256B",
         "spring.autoconfigure.exclude="
             + "org.springframework.boot.autoconfigure.security.servlet.SecurityAutoConfiguration,"
-            + "org.springframework.boot.autoconfigure.security.servlet.UserDetailsServiceAutoConfiguration"
+            + "org.springframework.boot.autoconfigure.security.servlet.UserDetailsServiceAutoConfiguration,"
+            + "org.springframework.boot.actuate.autoconfigure.security.servlet.ManagementWebSecurityAutoConfiguration"
     })
 @Testcontainers
 class ReleaseValidationE2EIT {

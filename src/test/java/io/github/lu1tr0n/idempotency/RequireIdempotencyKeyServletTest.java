@@ -38,7 +38,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         // and the test exercises the missing-key 400, not a 403.
         "spring.autoconfigure.exclude="
             + "org.springframework.boot.autoconfigure.security.servlet.SecurityAutoConfiguration,"
-            + "org.springframework.boot.autoconfigure.security.servlet.UserDetailsServiceAutoConfiguration")
+            + "org.springframework.boot.autoconfigure.security.servlet.UserDetailsServiceAutoConfiguration,"
+            + "org.springframework.boot.actuate.autoconfigure.security.servlet.ManagementWebSecurityAutoConfiguration")
 @AutoConfigureMockMvc
 class RequireIdempotencyKeyServletTest {
 

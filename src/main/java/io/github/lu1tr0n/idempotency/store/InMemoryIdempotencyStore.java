@@ -3,6 +3,7 @@ package io.github.lu1tr0n.idempotency.store;
 import io.github.lu1tr0n.idempotency.core.IdempotencyKey;
 import io.github.lu1tr0n.idempotency.core.IdempotencyRecord;
 import io.github.lu1tr0n.idempotency.core.IdempotencyStore;
+import io.github.lu1tr0n.idempotency.core.IdempotencyStoreHealth;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -20,7 +21,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * evicted on access — adequate for the test usage this class targets. For a
  * long-running single-instance deployment, swap to the JDBC store.
  */
-public class InMemoryIdempotencyStore implements IdempotencyStore {
+public class InMemoryIdempotencyStore implements IdempotencyStore, IdempotencyStoreHealth {
 
     private final ConcurrentHashMap<String, Entry> records = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, Lock> locks = new ConcurrentHashMap<>();
@@ -83,6 +84,16 @@ public class InMemoryIdempotencyStore implements IdempotencyStore {
             throw new IllegalStateException(
                 "Lock token mismatch for key '" + key + "' — the original lock expired and was re-acquired");
         }
+    }
+
+    /**
+     * Always healthy: the backing maps are in-process, so there is no external
+     * dependency that can be unreachable. The only failure mode is JVM
+     * OOM/eviction, which cannot be usefully probed.
+     */
+    @Override
+    public void verify() {
+        // no-op
     }
 
     /** Visible for tests. */

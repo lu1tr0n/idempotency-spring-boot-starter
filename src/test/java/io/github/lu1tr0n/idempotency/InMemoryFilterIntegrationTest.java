@@ -50,7 +50,8 @@ import static org.assertj.core.api.Assertions.assertThat;
         // unsecured endpoints (anonymous → bare key, behaviour unchanged).
         "spring.autoconfigure.exclude="
             + "org.springframework.boot.autoconfigure.security.servlet.SecurityAutoConfiguration,"
-            + "org.springframework.boot.autoconfigure.security.servlet.UserDetailsServiceAutoConfiguration"
+            + "org.springframework.boot.autoconfigure.security.servlet.UserDetailsServiceAutoConfiguration,"
+            + "org.springframework.boot.actuate.autoconfigure.security.servlet.ManagementWebSecurityAutoConfiguration"
     }
 )
 class InMemoryFilterIntegrationTest {
