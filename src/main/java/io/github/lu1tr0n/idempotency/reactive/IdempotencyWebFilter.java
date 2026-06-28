@@ -6,6 +6,7 @@ import io.github.lu1tr0n.idempotency.core.IdempotencyKey;
 import io.github.lu1tr0n.idempotency.core.IdempotencyRecord;
 import io.github.lu1tr0n.idempotency.core.IdempotencyStore;
 import io.github.lu1tr0n.idempotency.core.PayloadHasher;
+import io.github.lu1tr0n.idempotency.core.ResponseTtlDirective;
 import io.github.lu1tr0n.idempotency.heartbeat.LockHeartbeat;
 import io.github.lu1tr0n.idempotency.exception.IdempotencyKeyTooLongException;
 import io.github.lu1tr0n.idempotency.exception.IdempotencyPrincipalRequiredException;
@@ -37,6 +38,8 @@ import reactor.core.publisher.Mono;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
@@ -78,6 +81,9 @@ public class IdempotencyWebFilter implements WebFilter, Ordered {
     private final LockHeartbeat heartbeat;
     private final int maxBodyBytes;
     private final int maxResponseBytes;
+    /** Control-header name when the per-response TTL override is enabled, else {@code null}. */
+    private final String responseTtlHeaderName;
+    private final long responseTtlMaxSeconds;
 
     public IdempotencyWebFilter(IdempotencyStore store, IdempotencyProperties properties) {
         this(store, properties, null);
@@ -100,6 +106,10 @@ public class IdempotencyWebFilter implements WebFilter, Ordered {
             .toList());
         this.maxBodyBytes = properties.effectiveMaxBodyBytes();
         this.maxResponseBytes = properties.effectiveMaxResponseBytes();
+        this.responseTtlHeaderName = properties.getResponseTtlHeader().isEnabled()
+            ? properties.getResponseTtlHeader().getName()
+            : null;
+        this.responseTtlMaxSeconds = properties.effectiveResponseTtlMaxSeconds();
     }
 
     private boolean principalBindingActive() {
@@ -212,7 +222,8 @@ public class IdempotencyWebFilter implements WebFilter, Ordered {
         // doOnError don't fire on cancel, so without this a disconnected request
         // would have its lock renewed forever.
         LockHeartbeat.Handle heartbeatHandle = heartbeat.start(key, token);
-        CapturingResponseDecorator capturing = new CapturingResponseDecorator(exchange.getResponse(), maxResponseBytes);
+        CapturingResponseDecorator capturing =
+            new CapturingResponseDecorator(exchange.getResponse(), maxResponseBytes, responseTtlHeaderName);
         ServerHttpRequest cachedRequest = new CachedBodyServerHttpRequestDecorator(original, bodyBytes);
         ServerWebExchange mutated = exchange.mutate().request(cachedRequest).response(capturing).build();
 
@@ -239,16 +250,22 @@ public class IdempotencyWebFilter implements WebFilter, Ordered {
         }
         try {
             byte[] body = capturing.capturedBody();
+            Instant now = Instant.now();
             IdempotencyRecord.Builder b = IdempotencyRecord.builder()
                 .key(key.value())
                 .payloadHash(payloadValidationEnabled() ? payloadHash : null)
                 .statusCode(status)
                 .body(body)
                 .contentType(capturing.contentTypeValue())
-                .createdAt(Instant.now())
-                .expiresAt(Instant.now().plus(properties.getTtl()));
+                .createdAt(now)
+                .expiresAt(resolveExpiry(now, key, capturing));
             HttpHeaders headers = capturing.getHeaders();
             for (String name : headers.keySet()) {
+                // The control header was already stripped in beforeCommit; skip
+                // it defensively so a directive can never be stored and replayed.
+                if (responseTtlHeaderName != null && responseTtlHeaderName.equalsIgnoreCase(name)) {
+                    continue;
+                }
                 for (String value : headers.get(name)) {
                     b.addHeader(name, value);
                 }
@@ -257,6 +274,23 @@ public class IdempotencyWebFilter implements WebFilter, Ordered {
         } catch (IdempotencyStore.StoreException ex) {
             log.warn("WebFlux idempotency save failed (key={}): {}", key.value(), ex.getMessage());
         }
+    }
+
+    /**
+     * Resolve the record's expiry: the per-response TTL override when enabled and
+     * the handler emitted a valid directive (read + stripped in {@code
+     * beforeCommit}), otherwise the global {@code ttl}.
+     */
+    private Instant resolveExpiry(Instant now, IdempotencyKey key, CapturingResponseDecorator capturing) {
+        if (responseTtlHeaderName != null) {
+            long seconds = ResponseTtlDirective.resolveSeconds(capturing.controlHeaderValues(), responseTtlMaxSeconds);
+            if (seconds >= 0) {
+                log.debug("WebFlux idempotency per-response TTL override (key={}): persisting record for {}s.",
+                    key.value(), seconds);
+                return now.plusSeconds(seconds);
+            }
+        }
+        return now.plus(properties.getTtl());
     }
 
     private void safeReleaseLock(IdempotencyKey key, IdempotencyStore.LockToken token) {
@@ -374,9 +408,39 @@ public class IdempotencyWebFilter implements WebFilter, Ordered {
         private long capturedBytes = 0;
         private boolean overCap = false;
 
+        /**
+         * Per-response TTL control header to read+strip, or {@code null} when off.
+         * The values are captured in {@code beforeCommit} (which fires on the
+         * body, empty-body and flush commit paths alike, before headers go
+         * read-only) and published via a {@code volatile} field so
+         * {@code persistOrRelease} — which may run on a different thread — sees
+         * them.
+         */
+        private final String controlHeaderName;
+        private volatile List<String> controlHeaderValues = List.of();
+
         CapturingResponseDecorator(ServerHttpResponse delegate, int maxResponseBytes) {
+            this(delegate, maxResponseBytes, null);
+        }
+
+        CapturingResponseDecorator(ServerHttpResponse delegate, int maxResponseBytes, String controlHeaderName) {
             super(delegate);
             this.maxResponseBytes = maxResponseBytes;
+            this.controlHeaderName = controlHeaderName;
+            if (controlHeaderName != null) {
+                beforeCommit(() -> {
+                    List<String> values = getHeaders().get(controlHeaderName);
+                    if (values != null && !values.isEmpty()) {
+                        controlHeaderValues = new ArrayList<>(values);
+                        getHeaders().remove(controlHeaderName);
+                    }
+                    return Mono.empty();
+                });
+            }
+        }
+
+        List<String> controlHeaderValues() {
+            return controlHeaderValues;
         }
 
         @Override

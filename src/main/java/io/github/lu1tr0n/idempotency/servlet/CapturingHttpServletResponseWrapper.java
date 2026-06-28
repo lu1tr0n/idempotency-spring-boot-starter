@@ -8,6 +8,8 @@ import jakarta.servlet.http.HttpServletResponseWrapper;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.PrintWriter;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Servlet response wrapper that captures every byte written to the response,
@@ -49,13 +51,29 @@ public class CapturingHttpServletResponseWrapper extends HttpServletResponseWrap
     private long capturedBytes = 0;
     private boolean overCap = false;
 
+    /**
+     * Name of the per-response TTL control header to swallow, or {@code null}
+     * when the feature is off. When set, values written under this name are
+     * captured here and NOT forwarded to the real response, so the directive
+     * never reaches the client; the filter reads them back via
+     * {@link #controlHeaderValues()} to compute the record TTL.
+     */
+    private final String controlHeaderName;
+    private final List<String> controlHeaderValues = new ArrayList<>();
+
     public CapturingHttpServletResponseWrapper(HttpServletResponse response) {
         this(response, -1);
     }
 
     public CapturingHttpServletResponseWrapper(HttpServletResponse response, int maxResponseBytes) {
+        this(response, maxResponseBytes, null);
+    }
+
+    public CapturingHttpServletResponseWrapper(HttpServletResponse response, int maxResponseBytes,
+                                               String controlHeaderName) {
         super(response);
         this.maxResponseBytes = maxResponseBytes;
+        this.controlHeaderName = controlHeaderName;
     }
 
     /**
@@ -103,6 +121,84 @@ public class CapturingHttpServletResponseWrapper extends HttpServletResponseWrap
     public void setStatus(int sc) {
         super.setStatus(sc);
         this.capturedStatus = sc;
+    }
+
+    // === Per-response TTL control header ===
+    // When a control header name is configured, intercept the four header
+    // mutators so the directive is captured here and never written to the real
+    // response. set* replaces any prior captured values (HTTP set semantics);
+    // add* appends. A second value makes the directive multi-valued, which the
+    // parser then ignores.
+
+    private boolean isControlHeader(String name) {
+        return controlHeaderName != null && controlHeaderName.equalsIgnoreCase(name);
+    }
+
+    @Override
+    public void setHeader(String name, String value) {
+        if (isControlHeader(name)) {
+            controlHeaderValues.clear();
+            controlHeaderValues.add(value);
+            return;
+        }
+        super.setHeader(name, value);
+    }
+
+    @Override
+    public void addHeader(String name, String value) {
+        if (isControlHeader(name)) {
+            controlHeaderValues.add(value);
+            return;
+        }
+        super.addHeader(name, value);
+    }
+
+    @Override
+    public void setIntHeader(String name, int value) {
+        if (isControlHeader(name)) {
+            controlHeaderValues.clear();
+            controlHeaderValues.add(Integer.toString(value));
+            return;
+        }
+        super.setIntHeader(name, value);
+    }
+
+    @Override
+    public void addIntHeader(String name, int value) {
+        if (isControlHeader(name)) {
+            controlHeaderValues.add(Integer.toString(value));
+            return;
+        }
+        super.addIntHeader(name, value);
+    }
+
+    @Override
+    public void setDateHeader(String name, long date) {
+        // A date is never a valid delta-seconds directive: strip it from the wire
+        // (so the control header can't leak via a date setter) but capture no
+        // value, so the directive is simply ignored.
+        if (isControlHeader(name)) {
+            return;
+        }
+        super.setDateHeader(name, date);
+    }
+
+    @Override
+    public void addDateHeader(String name, long date) {
+        if (isControlHeader(name)) {
+            return;
+        }
+        super.addDateHeader(name, date);
+    }
+
+    /**
+     * Values written under the configured control header, in order. Empty when
+     * the feature is off or the handler set no override. The filter passes these
+     * to {@code ResponseTtlDirective.resolveSeconds} — more than one value is a
+     * multi-valued directive and is ignored there.
+     */
+    public List<String> controlHeaderValues() {
+        return controlHeaderValues;
     }
 
     @Override
@@ -172,6 +268,10 @@ public class CapturingHttpServletResponseWrapper extends HttpServletResponseWrap
         super.reset();
         rearmCapture();
         capturedStatus = HttpServletResponse.SC_OK;
+        // reset() clears every real header; the swallowed control header must go
+        // with them, or a directive set before a reset() would still drive the
+        // record TTL while every other header the handler set is gone.
+        controlHeaderValues.clear();
     }
 
     @Override

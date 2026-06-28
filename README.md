@@ -246,6 +246,39 @@ implementation("com.github.ben-manes.caffeine:caffeine")
 
 > **Data residency.** An enabled L1 keeps full response bodies and headers (which may include `Set-Cookie`, bearer tokens or PII) resident in process heap for `cache.ttl` — strictly shorter and smaller than the L2 store, which already persists the same surface for the record `ttl`. For endpoints handling regulated data, use a shorter `cache.ttl` or leave the L1 off.
 
+## Per-response TTL override
+
+The global `ttl` (default 24h) governs how long *every* record lives. When one endpoint needs a different retention — a sensitive response you want gone in minutes, or an expensive computation worth keeping longer — the handler can override it per response. Opt in, then emit the `Idempotency-Persist-For` header:
+
+```yaml
+spring:
+  idempotency:
+    ttl: 24h
+    response-ttl-header:
+      enabled: true                 # default false
+      name: Idempotency-Persist-For # the response header to read (this default)
+      max: 1h                        # ceiling; defaults to the global ttl
+```
+
+```java
+@PostMapping("/quote")
+ResponseEntity<Quote> quote(@RequestBody QuoteRequest req) {
+    return ResponseEntity.ok()
+        .header("Idempotency-Persist-For", "300")   // keep this record for 5 minutes
+        .body(price(req));
+}
+```
+
+The value is a non-negative integer count of **seconds** (the same delta-seconds grammar as `Cache-Control: max-age` and `Retry-After`). It is a control channel between the handler and the filter: the header is **stripped from the response** (the client never sees it) and is **not stored on the record**, so a replay never re-asserts it.
+
+- **Over the ceiling** → clamped down to `max` (a handler can never pin a record longer than the operator allows).
+- **`0`, negative, non-numeric, multi-valued, or absent** → ignored; the record keeps the global `ttl`. A malformed directive never fails the request — the response has already been sent.
+- **`max` defaults to the global `ttl`**, so *lengthening* a record beyond the system default requires raising `max` deliberately; *shortening* works out of the box.
+
+> **Set it from trusted logic.** Because the directive can shorten a record's life, do not reflect an unsanitised upstream- or client-controlled value into the header — that would let a caller narrow the idempotency window. The `max` ceiling bounds lengthening, not shortening.
+
+This is a library-specific extension; neither Stripe nor the IETF idempotency-key draft define a response-side persistence override.
+
 ## Roadmap
 
 - **v0.0.1** — JDBC backend, servlet filter, payload validation, in-memory store for tests.
@@ -264,7 +297,7 @@ implementation("com.github.ben-manes.caffeine:caffeine")
   - Spring Boot Actuator health indicator (store reachability + table existence; severity tracks `failure-strategy`) ✓
   - Lock-extension heartbeat (renew a long-running handler's lock so a concurrent retry can't steal it) ✓
   - L1 + L2 cache layering (optional Caffeine cache in front of Redis/JDBC for hot-key replays) ✓
-  - Per-response TTL override header (`X-Idempotency-Persist-For-Seconds`)
+  - Per-response TTL override header (`Idempotency-Persist-For`) ✓
 - **v0.0.6** — Extensibility: public `IdempotencyStore` SPI + multi-module layout (`idempotency-core` + `idempotency-store-{jdbc,redis,memory,…}`) so third parties can ship DynamoDB / MongoDB / Cosmos DB / etc. backends.
 - **v0.1.0** — First GA release; surface frozen; benchmarks; sample app; docs site.
 

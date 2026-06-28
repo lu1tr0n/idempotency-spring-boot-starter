@@ -104,6 +104,9 @@ public class IdempotencyProperties {
     /** Optional in-process L1 cache (Caffeine) in front of the distributed store. */
     private final Cache cache = new Cache();
 
+    /** Optional per-response TTL override via a handler-emitted response header. */
+    private final ResponseTtlHeader responseTtlHeader = new ResponseTtlHeader();
+
     /** JDBC-specific configuration. */
     private final Jdbc jdbc = new Jdbc();
 
@@ -261,6 +264,7 @@ public class IdempotencyProperties {
     public Health getHealth() { return health; }
     public LockExtension getLockExtension() { return lockExtension; }
     public Cache getCache() { return cache; }
+    public ResponseTtlHeader getResponseTtlHeader() { return responseTtlHeader; }
     public Jdbc getJdbc() { return jdbc; }
     public Redis getRedis() { return redis; }
     public boolean isCache5xx() { return cache5xx; }
@@ -311,6 +315,28 @@ public class IdempotencyProperties {
      */
     public int effectiveMaxResponseBytes() {
         return clampToInt(maxResponseSize);
+    }
+
+    /** ~100 years — a sane ceiling that keeps {@code Instant} arithmetic safe. */
+    private static final long MAX_RESPONSE_TTL_SECONDS = 100L * 365L * 24L * 60L * 60L;
+
+    /**
+     * Upper bound, in seconds, for a {@code response-ttl-header} override. The
+     * configured {@link ResponseTtlHeader#getMax() max} falls back to the global
+     * {@link #getTtl() ttl} when unset, so by default a handler can never pin a
+     * record longer than the system's normal retention. The result is clamped to
+     * {@link #MAX_RESPONSE_TTL_SECONDS} so {@code Instant.now().plusSeconds(...)}
+     * cannot overflow even if an operator configures an absurd ceiling. A
+     * non-positive ceiling resolves to {@code 0}, which the directive parser
+     * treats as "feature inert" (the global TTL is used).
+     */
+    public long effectiveResponseTtlMaxSeconds() {
+        Duration max = responseTtlHeader.getMax() != null ? responseTtlHeader.getMax() : ttl;
+        long seconds = max == null ? 0L : max.getSeconds();
+        if (seconds <= 0) {
+            return 0;
+        }
+        return Math.min(seconds, MAX_RESPONSE_TTL_SECONDS);
     }
 
     private static int clampToInt(DataSize size) {
@@ -474,6 +500,69 @@ public class IdempotencyProperties {
         public void setMaxEntrySize(DataSize maxEntrySize) { this.maxEntrySize = maxEntrySize; }
         public boolean isRecordStats() { return recordStats; }
         public void setRecordStats(boolean recordStats) { this.recordStats = recordStats; }
+    }
+
+    /**
+     * Per-response TTL override knobs. When {@code enabled}, a handler may emit a
+     * response header (default {@code Idempotency-Persist-For}) carrying a
+     * non-negative integer count of seconds to store <em>that one</em>
+     * idempotency record with a custom lifetime instead of the global
+     * {@link #getTtl() ttl}. The directive is a control channel between the
+     * handler and the filter: it is stripped from the response (so it never
+     * reaches the client or a later replay) and is consumed only to compute the
+     * record's {@code expiresAt}.
+     *
+     * <p>This is a library-specific extension — neither Stripe nor the IETF
+     * idempotency-key draft define a response-side persistence override. The
+     * value grammar (delta-seconds) follows {@code Cache-Control: max-age}
+     * (RFC 9111) and {@code Retry-After} (RFC 9110) for familiarity.
+     *
+     * <p>Off by default. A malformed, non-positive, multi-valued or over-ceiling
+     * value never fails the request (the response is already on the wire by the
+     * time it is read): malformed/non-positive falls back to the global
+     * {@code ttl}; an over-ceiling value is clamped down to {@link #getMax() max}.
+     *
+     * <p><strong>Data residency:</strong> because the ceiling defaults to the
+     * global {@code ttl}, lengthening a record beyond the system default requires
+     * an operator to raise {@code max} deliberately — a handler cannot extend
+     * retention past the configured norm on its own.
+     *
+     * <p><strong>Trusted channel:</strong> this header is a control channel from
+     * the handler to the filter. A handler must not reflect an unsanitised
+     * upstream- or client-controlled value into it: while the ceiling bounds
+     * <em>lengthening</em>, a hostile value could still <em>shorten</em> the
+     * window (narrowing the idempotency guarantee). Set it from trusted logic.
+     */
+    public static class ResponseTtlHeader {
+        /**
+         * Master switch. Default {@code false} — when off the header is ignored
+         * entirely and passes through to the client unchanged, so upgrading
+         * changes nothing.
+         */
+        private boolean enabled = false;
+
+        /**
+         * Name of the response header carrying the override. Default
+         * {@code Idempotency-Persist-For} (no {@code X-} prefix, per RFC 6648,
+         * consistent with the library's {@code Idempotency-Replayed} /
+         * {@code Idempotency-Mismatch} headers). Matched case-insensitively.
+         */
+        private String name = "Idempotency-Persist-For";
+
+        /**
+         * Upper bound on the override. A larger value supplied by a handler is
+         * clamped down to this. When unset, defaults to the global
+         * {@link #getTtl() ttl}, so a record can never out-live the system
+         * default unless an operator raises this explicitly.
+         */
+        private Duration max;
+
+        public boolean isEnabled() { return enabled; }
+        public void setEnabled(boolean enabled) { this.enabled = enabled; }
+        public String getName() { return name; }
+        public void setName(String name) { this.name = name; }
+        public Duration getMax() { return max; }
+        public void setMax(Duration max) { this.max = max; }
     }
 
     /** JDBC-specific knobs. */

@@ -6,6 +6,7 @@ import io.github.lu1tr0n.idempotency.core.IdempotencyKeyResolver;
 import io.github.lu1tr0n.idempotency.core.IdempotencyRecord;
 import io.github.lu1tr0n.idempotency.core.IdempotencyStore;
 import io.github.lu1tr0n.idempotency.core.PayloadHasher;
+import io.github.lu1tr0n.idempotency.core.ResponseTtlDirective;
 import io.github.lu1tr0n.idempotency.heartbeat.LockHeartbeat;
 import io.github.lu1tr0n.idempotency.observability.IdempotencyObservations;
 import io.github.lu1tr0n.idempotency.observability.IdempotencyObservations.Outcome;
@@ -87,6 +88,9 @@ public class IdempotencyFilter extends OncePerRequestFilter {
     private final int maxResponseBytes;
     private final IdempotencyObservations observations;
     private final LockHeartbeat heartbeat;
+    /** Control-header name when the per-response TTL override is enabled, else {@code null}. */
+    private final String responseTtlHeaderName;
+    private final long responseTtlMaxSeconds;
 
     public IdempotencyFilter(IdempotencyStore store,
                              IdempotencyKeyResolver keyResolver,
@@ -118,6 +122,11 @@ public class IdempotencyFilter extends OncePerRequestFilter {
         // Resolve the body ceilings once (-1 = unbounded).
         this.maxBodyBytes = properties.effectiveMaxBodyBytes();
         this.maxResponseBytes = properties.effectiveMaxResponseBytes();
+        // Per-response TTL override (null name = feature off).
+        this.responseTtlHeaderName = properties.getResponseTtlHeader().isEnabled()
+            ? properties.getResponseTtlHeader().getName()
+            : null;
+        this.responseTtlMaxSeconds = properties.effectiveResponseTtlMaxSeconds();
     }
 
     @Override
@@ -249,7 +258,8 @@ public class IdempotencyFilter extends OncePerRequestFilter {
         IdempotencyStore.LockToken token = lock.get();
         LockHeartbeat.Handle heartbeatHandle = heartbeat.start(key, token);
         try {
-            CapturingHttpServletResponseWrapper capturing = new CapturingHttpServletResponseWrapper(response, maxResponseBytes);
+            CapturingHttpServletResponseWrapper capturing =
+                new CapturingHttpServletResponseWrapper(response, maxResponseBytes, responseTtlHeaderName);
             boolean chainThrew = false;
             try {
                 chain.doFilter(cachedRequest, capturing);
@@ -358,21 +368,44 @@ public class IdempotencyFilter extends OncePerRequestFilter {
 
     private IdempotencyRecord snapshot(IdempotencyKey key, String payloadHash, CapturingHttpServletResponseWrapper response) {
         byte[] body = response.capturedBody();
+        Instant now = Instant.now();
         IdempotencyRecord.Builder b = IdempotencyRecord.builder()
             .key(key.value())
             .payloadHash(payloadValidationEnabled() ? payloadHash : null)
             .statusCode(response.capturedStatus())
             .body(body)
             .contentType(response.getContentType())
-            .createdAt(Instant.now())
-            .expiresAt(Instant.now().plus(properties.getTtl()));
+            .createdAt(now)
+            .expiresAt(resolveExpiry(now, key, response));
 
         for (String name : response.getHeaderNames()) {
+            // The control header is swallowed by the wrapper and never reaches
+            // getHeaderNames(); skip it defensively in case a custom subclass
+            // surfaces it, so a directive can never be stored and replayed.
+            if (responseTtlHeaderName != null && responseTtlHeaderName.equalsIgnoreCase(name)) {
+                continue;
+            }
             for (String value : response.getHeaders(name)) {
                 b.addHeader(name, value);
             }
         }
         return b.build();
+    }
+
+    /**
+     * Resolve the record's expiry: the per-response TTL override when enabled and
+     * the handler emitted a valid directive, otherwise the global {@code ttl}.
+     */
+    private Instant resolveExpiry(Instant now, IdempotencyKey key, CapturingHttpServletResponseWrapper response) {
+        if (responseTtlHeaderName != null) {
+            long seconds = ResponseTtlDirective.resolveSeconds(response.controlHeaderValues(), responseTtlMaxSeconds);
+            if (seconds >= 0) {
+                log.debug("Idempotency per-response TTL override (key={}): persisting record for {}s.",
+                    key.value(), seconds);
+                return now.plusSeconds(seconds);
+            }
+        }
+        return now.plus(properties.getTtl());
     }
 
     private boolean payloadValidationEnabled() {
