@@ -293,7 +293,7 @@ This is a library-specific extension; neither Stripe nor the IETF idempotency-ke
   - Configurable non-cacheable response statuses (release the lock so a corrected retry reuses the key)
   - Distributed tracing / metrics via Micrometer Observation (per-outcome span + counter; OpenTelemetry / Brave; servlet)
   - Flyway / Liquibase migration scripts (PostgreSQL)
-- **v0.0.5 (in progress)** — Operability:
+- **v0.0.5 (released)** — Operability:
   - Spring Boot Actuator health indicator (store reachability + table existence; severity tracks `failure-strategy`) ✓
   - Lock-extension heartbeat (renew a long-running handler's lock so a concurrent retry can't steal it) ✓
   - L1 + L2 cache layering (optional Caffeine cache in front of Redis/JDBC for hot-key replays) ✓
