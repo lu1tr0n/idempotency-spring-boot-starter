@@ -419,10 +419,6 @@ public class IdempotencyWebFilter implements WebFilter, Ordered {
         private final String controlHeaderName;
         private volatile List<String> controlHeaderValues = List.of();
 
-        CapturingResponseDecorator(ServerHttpResponse delegate, int maxResponseBytes) {
-            this(delegate, maxResponseBytes, null);
-        }
-
         CapturingResponseDecorator(ServerHttpResponse delegate, int maxResponseBytes, String controlHeaderName) {
             super(delegate);
             this.maxResponseBytes = maxResponseBytes;

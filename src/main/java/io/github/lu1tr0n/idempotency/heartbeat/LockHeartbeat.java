@@ -14,10 +14,11 @@ import io.github.lu1tr0n.idempotency.core.IdempotencyStore;
  * timeout still lets the lease lapse. It is not an at-most-once guarantee — see
  * the README "Lock extension" section.
  *
- * <p>Stack-agnostic: the servlet filter, the reactive filter, and the AOP aspect
- * all drive it the same way — {@link #start} right after acquiring the lock,
- * {@link Handle#stop()} in a {@code finally} / {@code doFinally} once the handler
- * has completed (or been cancelled).
+ * <p>Driven by the servlet and reactive filters the same way — {@link #start}
+ * right after acquiring the lock, {@link Handle#stop()} in a {@code finally} /
+ * {@code doFinally} once the handler has completed (or been cancelled). The AOP
+ * {@code @Idempotent} path does not yet drive the heartbeat; a long-running
+ * annotated method relies on plain {@code lock-timeout} expiry.
  */
 public interface LockHeartbeat {
 
