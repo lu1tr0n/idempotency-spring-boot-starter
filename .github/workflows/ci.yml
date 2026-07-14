@@ -53,3 +53,39 @@ jobs:
           name: test-reports-java-${{ matrix.java }}
           path: build/reports/tests/
           retention-days: 14
+
+  floor:
+    # We advertise "Spring Boot 3.5+". This job guards it: it builds and runs
+    # the whole suite against the FLOOR of that range (Boot 3.5.0) instead of
+    # the latest patch. Compiling green here proves the source only references
+    # symbols that already exist in 3.5.0, so we never accidentally require a
+    # later 3.5.x patch. Runs on Java 17, the minimum consumer baseline.
+    name: Floor compat (Boot 3.5.0, Java 17)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Set up JDK 17 (Temurin)
+        uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v5.0.0
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@748248ddd2a24f49513d8f472f81c3a07d4d50e1 # v4.4.4
+
+      - name: Build + test against the floor BOM
+        run: ./gradlew build --no-daemon --stacktrace -PspringBootBomVersion=3.5.0
+
+      - name: Upload test reports on failure
+        if: failure()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: test-reports-floor
+          path: build/reports/tests/
+          retention-days: 14

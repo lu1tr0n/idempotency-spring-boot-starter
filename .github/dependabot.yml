@@ -1,0 +1,25 @@
+version: 2
+updates:
+  # Gradle dependencies (Spring Boot BOM, plugins, test libraries). Weekly so a
+  # stale BOM like the 3.4.4 → 3.5.16 catch-up surfaces on its own next time.
+  - package-ecosystem: gradle
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore
+    groups:
+      # Keep the Spring Boot plugin and BOM moving together in one PR.
+      spring-boot:
+        patterns:
+          - "org.springframework.boot*"
+
+  # Pinned GitHub Actions SHAs in the workflows. Weekly so action pins don't rot.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore

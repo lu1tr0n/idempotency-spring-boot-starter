@@ -1,14 +1,15 @@
 // build.gradle.kts
 //
-// Spring Boot starter (not a Spring Boot application) — Boot's plugin is
-// applied for dependency management only; the executable boot-jar task is
-// disabled so the published artifact is a plain library JAR.
+// Spring Boot starter (not a Spring Boot application). The published artifact
+// is a plain library JAR; there is no boot-jar. Spring's dependency versions
+// come from the BOM imported below via the io.spring.dependency-management
+// plugin — the org.springframework.boot Gradle plugin is deliberately NOT
+// applied, since none of its tasks (bootJar/bootRun) are used here.
 
 import com.vanniktech.maven.publish.SonatypeHost
 
 plugins {
     `java-library`
-    id("org.springframework.boot") version "3.5.16" apply false
     id("io.spring.dependency-management") version "1.1.7"
     id("com.vanniktech.maven.publish") version "0.30.0"
 }
@@ -30,9 +31,16 @@ java {
     // identical extension and classifier".
 }
 
+// Default (3.5.16) lives in gradle.properties so Dependabot can bump it; CI
+// overrides it with `-PspringBootBomVersion=3.5.0` to prove the source still
+// compiles and tests green against the floor of our advertised support range.
+// If the source only uses symbols present in the floor BOM, the shipped
+// bytecode references those same symbols and stays compatible across 3.5.x.
+val springBootBomVersion: String by project
+
 dependencyManagement {
     imports {
-        mavenBom("org.springframework.boot:spring-boot-dependencies:3.5.16")
+        mavenBom("org.springframework.boot:spring-boot-dependencies:$springBootBomVersion")
     }
 }
 
