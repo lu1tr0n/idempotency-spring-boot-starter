@@ -1,7 +1,7 @@
 package io.github.lu1tr0n.idempotency.principal;
 
 import io.github.lu1tr0n.idempotency.core.IdempotencyKey;
-import io.github.lu1tr0n.idempotency.core.IdempotencyKeyResolver;
+import io.github.lu1tr0n.idempotency.servlet.IdempotencyKeyResolver;
 import io.github.lu1tr0n.idempotency.exception.IdempotencyPrincipalRequiredException;
 
 import jakarta.servlet.http.HttpServletRequest;

@@ -1,6 +1,8 @@
-package io.github.lu1tr0n.idempotency.core;
+package io.github.lu1tr0n.idempotency.servlet;
 
 import jakarta.servlet.http.HttpServletRequest;
+
+import io.github.lu1tr0n.idempotency.core.IdempotencyKey;
 
 import java.util.Optional;
 

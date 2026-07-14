@@ -4,7 +4,7 @@ import io.github.lu1tr0n.idempotency.annotation.Idempotent;
 import io.github.lu1tr0n.idempotency.autoconfigure.IdempotencyProperties;
 import io.github.lu1tr0n.idempotency.autoconfigure.IdempotencyProperties.PrincipalBinding;
 import io.github.lu1tr0n.idempotency.core.IdempotencyKey;
-import io.github.lu1tr0n.idempotency.core.IdempotencyKeyResolver;
+import io.github.lu1tr0n.idempotency.servlet.IdempotencyKeyResolver;
 import io.github.lu1tr0n.idempotency.core.IdempotencyRecord;
 import io.github.lu1tr0n.idempotency.core.IdempotencyStore;
 import io.github.lu1tr0n.idempotency.principal.IdempotencyPrincipalResolver;

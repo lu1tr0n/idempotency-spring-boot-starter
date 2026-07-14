@@ -1,7 +1,7 @@
 package io.github.lu1tr0n.idempotency.autoconfigure;
 
-import io.github.lu1tr0n.idempotency.core.HeaderIdempotencyKeyResolver;
-import io.github.lu1tr0n.idempotency.core.IdempotencyKeyResolver;
+import io.github.lu1tr0n.idempotency.servlet.HeaderIdempotencyKeyResolver;
+import io.github.lu1tr0n.idempotency.servlet.IdempotencyKeyResolver;
 import io.github.lu1tr0n.idempotency.core.IdempotencyStore;
 import io.github.lu1tr0n.idempotency.health.IdempotencyStoreHealthIndicator;
 import io.github.lu1tr0n.idempotency.heartbeat.LockHeartbeat;

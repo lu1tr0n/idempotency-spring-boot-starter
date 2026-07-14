@@ -59,16 +59,26 @@ jobs:
       - name: Publish to Maven Central via Central Portal
         # Vanniktech's plugin reads the GPG key from `signingInMemoryKey*`
         # properties and the Sonatype credentials from `mavenCentralUsername`
-        # / `mavenCentralPassword`. `publishToMavenCentral` uploads the
-        # signed staging bundle; because `automaticRelease = true` is set in
-        # build.gradle.kts, Sonatype's validators promote the deployment to
-        # the public registry without a manual "Publish" click.
+        # / `mavenCentralPassword`. `publishToMavenCentral` uploads the signed
+        # staging bundle; because `automaticRelease = true` is set in the build
+        # files, the Portal validators promote the deployment without a manual
+        # "Publish" click, and the task blocks until each deployment reaches a
+        # terminal (validated) state.
+        #
+        # 0.30.0 creates one deployment PER module, not an aggregated one, so
+        # publish `idempotency-core` FIRST: the starter POM declares a
+        # dependency on it, and publishing the dependency (and waiting for it to
+        # validate) before the artifact that references it means a core failure
+        # aborts this step before a starter pointing at a missing coordinate can
+        # ever go public.
         env:
           ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
           ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
           ORG_GRADLE_PROJECT_signingInMemoryKey: ${{ secrets.GPG_SIGNING_KEY }}
           ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ secrets.GPG_SIGNING_PASSPHRASE }}
-        run: ./gradlew publishToMavenCentral --no-configuration-cache --no-daemon --stacktrace
+        run: |
+          ./gradlew :idempotency-core:publishToMavenCentral --no-configuration-cache --no-daemon --stacktrace
+          ./gradlew :publishToMavenCentral --no-configuration-cache --no-daemon --stacktrace
 
       - name: Mirror to GitHub Packages
         # Secondary publish target — keeps the repo page sidebar showing a
@@ -94,4 +104,4 @@ jobs:
           gh release create "${GIT_TAG}" \
             --repo "${GH_REPO}" \
             --title "${GIT_TAG}" \
-            --notes "Released to Maven Central. Coordinates: \`io.github.lu1tr0n:idempotency-spring-boot-starter:${VERSION}\` — see [the package page](https://central.sonatype.com/artifact/io.github.lu1tr0n/idempotency-spring-boot-starter/${VERSION})."
+            --notes "Released to Maven Central. Coordinates: \`io.github.lu1tr0n:idempotency-spring-boot-starter:${VERSION}\` (the starter) and \`io.github.lu1tr0n:idempotency-core:${VERSION}\` (the dependency-free storage SPI for custom backends) — see [the package page](https://central.sonatype.com/artifact/io.github.lu1tr0n/idempotency-spring-boot-starter/${VERSION})."

@@ -45,6 +45,12 @@ dependencyManagement {
 }
 
 dependencies {
+    // The frozen storage SPI lives in its own dependency-free module. `api` so
+    // consumers of the starter get the core types (IdempotencyStore, records,
+    // keys) transitively — the same class set they had when core shipped inside
+    // this jar.
+    api(project(":idempotency-core"))
+
     // Core — needed at runtime for the auto-config + properties metadata.
     implementation("org.springframework.boot:spring-boot")
     implementation("org.springframework.boot:spring-boot-autoconfigure")

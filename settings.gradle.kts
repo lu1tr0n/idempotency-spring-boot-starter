@@ -1,10 +1,14 @@
 // settings.gradle.kts
 //
-// Single-module Gradle project. The artifact ships as one JAR; backends
-// (JDBC, Redis) are auto-activated via Spring Boot conditionals based on
-// classpath + bean presence, not via separate Maven modules.
+// The root project is the Spring Boot starter (all the engine, filters, AOP,
+// and the jdbc/redis/cache backends). The `idempotency-core` sub-module holds
+// only the frozen, dependency-free storage SPI so third parties can ship a
+// backend by depending on core alone. The starter depends on core via `api`,
+// so existing consumers get the identical class set and behavior.
 
 rootProject.name = "idempotency-spring-boot-starter"
+
+include("idempotency-core")
 
 dependencyResolutionManagement {
     repositoriesMode = RepositoriesMode.FAIL_ON_PROJECT_REPOS
