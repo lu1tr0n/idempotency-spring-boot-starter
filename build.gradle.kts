@@ -6,12 +6,10 @@
 // plugin — the org.springframework.boot Gradle plugin is deliberately NOT
 // applied, since none of its tasks (bootJar/bootRun) are used here.
 
-import com.vanniktech.maven.publish.SonatypeHost
-
 plugins {
     `java-library`
     id("io.spring.dependency-management") version "1.1.7"
-    id("com.vanniktech.maven.publish") version "0.30.0"
+    id("com.vanniktech.maven.publish") version "0.37.0"
 }
 
 java {
@@ -36,7 +34,10 @@ java {
 // compiles and tests green against the floor of our advertised support range.
 // If the source only uses symbols present in the floor BOM, the shipped
 // bytecode references those same symbols and stays compatible across 3.5.x.
-val springBootBomVersion: String by project
+// Read via project.property (not a `by project` delegate, which Gradle 9
+// deprecated) — Dependabot still bumps the gradle.properties value it is
+// interpolated from below.
+val springBootBomVersion = project.property("springBootBomVersion") as String
 
 dependencyManagement {
     imports {
@@ -177,7 +178,9 @@ tasks.withType<GenerateModuleMetadata> {
 }
 
 mavenPublishing {
-    publishToMavenCentral(SonatypeHost.CENTRAL_PORTAL, automaticRelease = true)
+    // vanniktech 0.37 dropped the SonatypeHost argument — OSSRH is shut down,
+    // so the Central Portal is the only host.
+    publishToMavenCentral(automaticRelease = true)
     signAllPublications()
     // POM metadata is read from gradle.properties (POM_NAME, POM_DESCRIPTION, ...).
 }

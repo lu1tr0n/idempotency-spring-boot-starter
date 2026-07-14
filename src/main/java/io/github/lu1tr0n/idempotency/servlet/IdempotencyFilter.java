@@ -43,7 +43,7 @@ import java.util.Set;
  *       {@link IdempotencyKey#of(String)} validation, return 400.</li>
  *   <li><strong>Payload hashing.</strong> Compute SHA-256 of method + URI +
  *       request body bytes (needs the request wrapped in
- *       {@link ContentCachingRequestWrapper} so we can read the body twice).</li>
+ *       {@link CachedBodyHttpServletRequestWrapper} so we can read the body twice).</li>
  *   <li><strong>Cache lookup.</strong> If a record exists for the key:
  *       <ul>
  *         <li>Payload hash matches → replay the cached response and return.</li>

@@ -6,8 +6,6 @@
 // is deliberate and load-bearing: it is what keeps the `core` package pure, so
 // do not add framework dependencies to this module.
 
-import com.vanniktech.maven.publish.SonatypeHost
-
 plugins {
     `java-library`
     // Ships the store contract TCK as a published `-test-fixtures` artifact so
@@ -15,7 +13,7 @@ plugins {
     // contract the built-in stores meet. Test fixtures are a separate source
     // set + artifact, so the MAIN jar stays dependency-free.
     `java-test-fixtures`
-    id("com.vanniktech.maven.publish") version "0.30.0"
+    id("com.vanniktech.maven.publish") version "0.37.0"
 }
 
 java {
@@ -50,7 +48,8 @@ tasks.withType<Test> {
 }
 
 mavenPublishing {
-    publishToMavenCentral(SonatypeHost.CENTRAL_PORTAL, automaticRelease = true)
+    // vanniktech 0.37 dropped the SonatypeHost argument (OSSRH is shut down).
+    publishToMavenCentral(automaticRelease = true)
     signAllPublications()
     // Coordinates/POM read from this module's gradle.properties (POM_ARTIFACT_ID,
     // POM_NAME, POM_DESCRIPTION); GROUP + VERSION_NAME inherit from the root.

@@ -56,8 +56,7 @@ import java.util.concurrent.CompletionStage;
  * pointless second store round-trip.
  *
  * <p>Async return types ({@link CompletableFuture}, reactive types) are
- * handled in {@link #attachAsyncCompletion(IdempotencyKey, String,
- * IdempotencyStore.LockToken, Object)} — the aspect snapshots the eventual
+ * handled in {@link #attachAsyncCompletion} — the aspect snapshots the eventual
  * value, not the wrapper.
  */
 @Aspect

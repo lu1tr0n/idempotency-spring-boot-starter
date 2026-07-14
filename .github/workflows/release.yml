@@ -65,12 +65,11 @@ jobs:
         # "Publish" click, and the task blocks until each deployment reaches a
         # terminal (validated) state.
         #
-        # 0.30.0 creates one deployment PER module, not an aggregated one, so
-        # publish `idempotency-core` FIRST: the starter POM declares a
-        # dependency on it, and publishing the dependency (and waiting for it to
-        # validate) before the artifact that references it means a core failure
-        # aborts this step before a starter pointing at a missing coordinate can
-        # ever go public.
+        # Each module is its own Central Portal deployment, so publish
+        # `idempotency-core` FIRST: the starter POM declares a dependency on it,
+        # and publishing the dependency (and waiting for it to validate) before
+        # the artifact that references it means a core failure aborts this step
+        # before a starter pointing at a missing coordinate can ever go public.
         env:
           ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
           ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
