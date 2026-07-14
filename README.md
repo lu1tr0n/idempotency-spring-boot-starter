@@ -31,7 +31,7 @@ This starter does all of that with two lines of config.
 ```kotlin
 // build.gradle.kts
 dependencies {
-    implementation("io.github.lu1tr0n:idempotency-spring-boot-starter:0.0.5")
+    implementation("io.github.lu1tr0n:idempotency-spring-boot-starter:0.0.6")
 }
 ```
 
