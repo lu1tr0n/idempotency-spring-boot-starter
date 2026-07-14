@@ -8,14 +8,14 @@ import com.vanniktech.maven.publish.SonatypeHost
 
 plugins {
     `java-library`
-    id("org.springframework.boot") version "3.4.4" apply false
+    id("org.springframework.boot") version "3.5.16" apply false
     id("io.spring.dependency-management") version "1.1.7"
     id("com.vanniktech.maven.publish") version "0.30.0"
 }
 
 java {
     toolchain {
-        // Java 21 matches the Spring Boot 3.4 baseline and what
+        // Java 21 matches the Spring Boot 3.5 baseline and what
         // spring-idempotency-kit uses. Consumers on Java 17 can still
         // depend on us because we compile to bytecode 17 below.
         languageVersion = JavaLanguageVersion.of(21)
@@ -32,7 +32,7 @@ java {
 
 dependencyManagement {
     imports {
-        mavenBom("org.springframework.boot:spring-boot-dependencies:3.4.4")
+        mavenBom("org.springframework.boot:spring-boot-dependencies:3.5.16")
     }
 }
 

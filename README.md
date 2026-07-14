@@ -31,9 +31,11 @@ This starter does all of that with two lines of config.
 ```kotlin
 // build.gradle.kts
 dependencies {
-    implementation("io.github.lu1tr0n:idempotency-spring-boot-starter:0.0.4")
+    implementation("io.github.lu1tr0n:idempotency-spring-boot-starter:0.0.5")
 }
 ```
+
+**Requires** Spring Boot 3.5+ and Java 17+. (The artifact is built against the Spring Boot 3.5 dependency BOM and compiled to Java 17 bytecode.)
 
 ```yaml
 # application.yml
