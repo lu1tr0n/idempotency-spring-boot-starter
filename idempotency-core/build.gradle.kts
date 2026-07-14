@@ -15,7 +15,7 @@ plugins {
     // contract the built-in stores meet. Test fixtures are a separate source
     // set + artifact, so the MAIN jar stays dependency-free.
     `java-test-fixtures`
-    id("com.vanniktech.maven.publish") version "0.30.0"
+    id("com.vanniktech.maven.publish") version "0.37.0"
 }
 
 java {
