@@ -65,7 +65,12 @@ public interface IdempotencyStore {
      * The {@code token} must match the token returned from {@link #acquireLock}
      * — implementations reject mismatched tokens to prevent a lock-stealing
      * race where caller A's lock expires, caller B acquires a new lock, and
-     * caller A's late {@code save} corrupts caller B's lock.
+     * caller A's late {@code save} corrupts caller B's lock. On a token
+     * mismatch (or a lock that no longer exists) the implementation
+     * <strong>must throw</strong> a {@link RuntimeException} and must
+     * <strong>not</strong> silently persist the record — the caller relies on
+     * the exception to learn its lock was lost. The three built-in stores throw
+     * {@link IllegalStateException}; the storage contract test enforces this.
      *
      * <p>Throws {@link StoreException} when the underlying storage is
      * unavailable; the caller decides whether to fail-open or fail-closed

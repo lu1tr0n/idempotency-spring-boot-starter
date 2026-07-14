@@ -153,6 +153,22 @@ Register the bean and the starter wires it into the filter/AOP path automaticall
 }
 ```
 
+**Validate your backend against the contract.** `idempotency-core` ships a TCK as a test-fixtures artifact. Extend `AbstractIdempotencyStoreContractTest`, return your store, and the inherited tests assert the atomicity and lifecycle guarantees (atomic `acquireLock`, token-checked `save`, read-time expiry, ...) that the built-in stores meet:
+
+```kotlin
+dependencies {
+    testImplementation(testFixtures("io.github.lu1tr0n:idempotency-core:0.0.6"))
+}
+```
+
+```java
+class DynamoIdempotencyStoreTest extends AbstractIdempotencyStoreContractTest {
+    @Override protected IdempotencyStore newStore() { return new DynamoIdempotencyStore(testClient()); }
+}
+```
+
+The `InMemoryIdempotencyStore` in `idempotency-core` is a pure-JDK reference implementation you can read as a worked example.
+
 The `io.github.lu1tr0n.idempotency.core` package is the frozen extension surface: within a `0.0.x` line it does not change in a source- or binary-incompatible way. Everything else (filters, AOP, auto-configuration, the built-in jdbc/redis/cache stores) is internal.
 
 ## Method-level overrides
@@ -329,7 +345,7 @@ This is a library-specific extension; neither Stripe nor the IETF idempotency-ke
   - Lock-extension heartbeat (renew a long-running handler's lock so a concurrent retry can't steal it) ✓
   - L1 + L2 cache layering (optional Caffeine cache in front of Redis/JDBC for hot-key replays) ✓
   - Per-response TTL override header (`Idempotency-Persist-For`) ✓
-- **v0.0.6** — Extensibility: the `IdempotencyStore` SPI is carved into a dependency-free `io.github.lu1tr0n:idempotency-core` module, so third parties can ship DynamoDB / MongoDB / Cosmos DB backends by depending on core alone. The starter aggregates it, so existing consumers are unaffected. (Splitting each built-in backend into its own artifact is deferred to `0.1.0`, when a third-party backend makes the finer granularity worthwhile.)
+- **v0.0.6** — Extensibility: the `IdempotencyStore` SPI is carved into a dependency-free `io.github.lu1tr0n:idempotency-core` module, so third parties can ship DynamoDB / MongoDB / Cosmos DB backends by depending on core alone. Ships a store contract TCK (`AbstractIdempotencyStoreContractTest`, as a test-fixtures artifact) and the in-memory reference implementation in core. The starter aggregates it, so existing consumers are unaffected. (Splitting each built-in backend into its own artifact is deferred to `0.1.0`, when a third-party backend makes the finer granularity worthwhile.)
   - **Breaking (pre-1.0):** the two servlet key resolvers moved package so `core` can stay servlet-free. If you referenced them directly, update the import: `io.github.lu1tr0n.idempotency.core.IdempotencyKeyResolver` → `...idempotency.servlet.IdempotencyKeyResolver` (same for `HeaderIdempotencyKeyResolver`). No behavior change; the default resolver is still auto-configured, so most apps are unaffected.
 - **v0.1.0** — First GA release; surface frozen; benchmarks; sample app; docs site.
 

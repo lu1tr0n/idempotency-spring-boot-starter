@@ -7,12 +7,15 @@
  *
  * <h2>Dependency-free by design</h2>
  *
- * <p>This module has <strong>no</strong> Spring, Jakarta, or third-party
- * compile dependencies — it is pure JDK. That is enforced structurally: the
- * {@code idempotency-core} Gradle module declares no such dependencies, so any
- * accidental framework import here fails to compile. Keep it that way; a
- * backend author must be able to implement the SPI without inheriting a web
- * stack.
+ * <p>The published {@code idempotency-core} library jar has <strong>no</strong>
+ * Spring, Jakarta, or third-party compile dependencies — it is pure JDK, so a
+ * backend author implements the SPI without inheriting a web stack. That is
+ * enforced structurally: the module's main source set declares no such
+ * dependencies, so any accidental framework import here fails to compile. Keep
+ * it that way. (The store contract TCK ships as a separate {@code
+ * -test-fixtures} artifact with its own JUnit dependency; it never touches the
+ * main jar, and its {@code optional} POM entry is non-transitive, so consumers
+ * of core still inherit nothing.)
  *
  * <h2>Stability</h2>
  *
