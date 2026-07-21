@@ -33,7 +33,7 @@ java {
 dependencies {
     // The TCK abstract test lives in test fixtures and needs JUnit at compile
     // time; `testFixturesApi` so consumers of the fixtures inherit it.
-    testFixturesApi(platform("org.junit:junit-bom:5.12.2"))
+    testFixturesApi(platform("org.junit:junit-bom:6.1.2"))
     testFixturesApi("org.junit.jupiter:junit-jupiter")
 
     // Core's own unit tests (IdempotencyKey, ResponseTtlDirective) use AssertJ;
